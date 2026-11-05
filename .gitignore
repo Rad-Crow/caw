@@ -1,0 +1,17 @@
+.*
+!.gitignore
+!.dockerignore
+
+node_modules/
+web/dist/
+server/target/
+*.db
+*.db-shm
+*.db-wal
+
+android/**/build/
+android/local.properties
+android/*.keystore
+android/*.jks
+e2e/out/
+data/

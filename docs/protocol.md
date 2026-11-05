@@ -1,0 +1,440 @@
+# Caw Protocol Specification
+
+Version 1, November 2026
+
+This document specifies the formats, algorithms and behavior required for interoperable Caw clients and servers. Design rationale and security analysis are in [whitepaper.md](whitepaper.md). HTTP endpoints, request and response bodies and WebSocket messages are in [api.md](api.md).
+
+## Contents
+
+1. [Conventions](#1-conventions)
+2. [Primitives](#2-primitives)
+3. [Accounts and credentials](#3-accounts-and-credentials)
+4. [Vault](#4-vault)
+5. [Devices](#5-devices)
+6. [Contacts](#6-contacts)
+7. [Messages](#7-messages)
+8. [Calls](#8-calls)
+9. [Push notifications](#9-push-notifications)
+10. [Server requirements](#10-server-requirements)
+11. [Client storage](#11-client-storage)
+12. [Test vectors](#12-test-vectors)
+
+## 1. Conventions
+
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be interpreted as described in RFC 2119 and RFC 8174.
+
+- `b64(x)` is base64url without padding (RFC 4648, section 5). Standard base64 is used only where stated.
+- Strings are UTF-8. JSON is UTF-8 encoded.
+- `||` is byte concatenation. `u64be(n)` is `n` as an 8-byte big-endian unsigned integer.
+- Times are integer seconds since the Unix epoch, except `updated_at` and vault entry times, which are milliseconds.
+- `LF` is the byte 0x0A.
+
+Identifiers:
+
+| identifier | format |
+|---|---|
+| account id | decimal string of the server's numeric user id |
+| device id, link id, message id, call id, blob id, contact id | UUID string |
+| ticket, link token, session token | `b64` of 32 random bytes |
+| client id | UUID string chosen by a client per connection lifetime |
+
+A server is identified by its base URL (scheme and authority, no trailing slash).
+
+## 2. Primitives
+
+| name | definition |
+|---|---|
+| Ed25519 | RFC 8032 (pure). Public keys 32 bytes, signatures 64 bytes |
+| X25519 | RFC 7748. Keys 32 bytes |
+| HPKE | RFC 9180, mode_base, KEM 0x0020 DHKEM(X25519, HKDF-SHA256), KDF 0x0001 HKDF-SHA256, AEAD 0x0001 AES-128-GCM, single-shot Seal and Open |
+| AES-GCM | 12-byte nonce, 16-byte tag; key size as stated |
+| Argon2id | RFC 9106, version 0x13 |
+| PBKDF2 | RFC 8018, HMAC-SHA256 |
+
+Labels:
+
+| label | use |
+|---|---|
+| `caw-enc-v1` | encryption key certificate ([5.2](#52-encryption-keys)) |
+| `caw-message-key-v1` | HPKE info ([7.2](#72-encryption)) |
+| `caw-message-v1` | message signature ([7.4](#74-signature)) |
+| `caw-call-v1` | session description signature ([8.2](#82-signaling)) |
+| `caw-blob-v1` | attachment AAD ([7.10](#710-attachments)) |
+| `caw-words-v1` | verification words ([6.4](#64-verification-words)) |
+| `caw-key-v1` | data key wrapping AAD ([4.1](#41-data-key)) |
+| `caw-vault-v1` | vault AAD ([4.2](#42-document)) |
+| `caw:1:` | pairing code prefix ([6.2](#62-pairing-code)) |
+
+## 3. Accounts and credentials
+
+### 3.1 Derivation
+
+```
+k            = Argon2id(password = UTF-8(NFC(password)), salt, m, t, p, length = 64)
+login key    = b64(k[0..32])
+password key = k[32..64]
+```
+
+- `salt` is 16 bytes, transmitted as `b64`. `m` (KiB), `t` and `p` are returned with the salt; version 1 uses `m = 65536, t = 3, p = 1`.
+- Clients MUST obtain the salt and parameters from `POST /api/auth/salt` and MUST NOT send the password or the password key to a server.
+- Usernames are compared after trimming and lowercasing.
+
+### 3.2 Sign-in and credential changes
+
+- Sign-in sends `{username, login_key}`. On success the client establishes the data key ([4.5](#45-key-establishment)) using the password and the derivation.
+- A credential change generates a new 16-byte salt, derives a new login key and password key, and sends `PUT /api/me/login` with the new `login_key` and `salt`, the current login key (not required when the account is flagged `must_change`), and the data key wrapped under the new password key.
+- Clients MUST reject a new password shorter than 12 code points, with fewer than 5 distinct characters, containing the username (3 or more characters), whose letters alone form a common word or its repetition, or whose letters and digits, 6 or more, form a run of a numeric, alphabetic or keyboard sequence.
+
+## 4. Vault
+
+### 4.1 Data key
+
+The data key is 32 random bytes per account. Its wrapped form:
+
+```
+wrapped = salt "." m "." t "." p "." b64(nonce || AES-256-GCM(password key, nonce, aad = "caw-key-v1", data key))
+```
+
+`salt`, `m`, `t` and `p` are those of the derivation that produced the password key, as `b64` and decimal strings. To unwrap, a client derives the password key with the recorded parameters.
+
+### 4.2 Document
+
+```
+blob = b64(nonce || AES-256-GCM(data key, nonce, aad = "caw-vault-v1", UTF-8(JSON(document))))
+document = { "v": 1, "contacts": { <contact id>: <entry> } }
+entry    = { "u": <ms>, "c": <contact> } | { "u": <ms>, "gone": true }
+```
+
+Contact record:
+
+| field | type | |
+|---|---|---|
+| `id` | string | UUID, equal to the entry key |
+| `name` | string | name received during pairing |
+| `alias` | string, optional | user's rename |
+| `favorite` | `true`, optional | |
+| `server` | string | contact's server base URL |
+| `account` | string | contact's account id |
+| `out` | `{link_id, token}` | contact's link, used to reach the contact |
+| `in` | string | id of the account's link for the contact |
+| `status` | `"pending"` or `"active"` | |
+| `created_at` | integer | seconds |
+| `ttl` | integer, optional | conversation message lifetime, seconds |
+| `words` | array of 6 strings, optional | verification words |
+| `updated_at` | integer | milliseconds; equal to the entry's `u` |
+
+Clients MUST ignore unknown fields.
+
+### 4.3 Merge
+
+For each entry `e` in a fetched document, let `L` be the local `updated_at` of the contact with that id, else the local removal time for that id, else -1:
+
+- If `e.u <= L`, the local state is kept.
+- Else if `e.gone` is true or `e.c` is absent, the local contact is removed and its removal time set to `e.u`.
+- Else the local contact's synced fields are replaced with `e.c`, or it is added.
+
+A local change sets `updated_at = max(now_ms, updated_at + 1)`. A change caused by an `accept` or `timer` message sets `updated_at = max(created_at * 1000, updated_at + 1)`, using the message's `created_at`. Removal markers MAY be omitted from uploads 180 days after their time.
+
+### 4.4 Upload
+
+1. `GET /api/vault`. If `blob` is present, decrypt it and merge it.
+2. If the local state has no entry newer than the fetched copy, stop.
+3. `PUT /api/vault {version, blob}` with the fetched `version` and the local state encrypted under the data key.
+4. On `409`, repeat from step 1.
+
+On a `vault` event with a version greater than the last one seen, clients fetch and merge.
+
+### 4.5 Key establishment
+
+At sign-in, with the password and its derivation:
+
+1. If `wrapped_key` is present, unwrap it ([4.1](#41-data-key)).
+2. Otherwise, or if unwrapping fails: use a data key stored on the device if it decrypts `blob` or `blob` is absent; else, if `blob` is absent, generate a data key. Store the wrapped key with `PUT /api/vault/key`.
+3. If no data key results, the vault is locked under a previous password. The client MAY ask for that password, unwrap the data key with it, verify that it decrypts `blob`, and store it wrapped under the current password key. The client MAY instead generate a new data key, store it wrapped, and upload its local contacts as the new vault.
+
+A client with a session but no stored data key MUST end the session and sign in again. A client whose stored data key no longer decrypts the vault MUST delete the key, end the session and sign in again.
+
+### 4.6 Key replacement
+
+To replace the data key, a client fetches and merges the vault, generates a new data key, changes the credential ([3.2](#32-sign-in-and-credential-changes)) with the new key wrapped, and uploads the vault encrypted with the new key. While replacing, it merges fetched copies that decrypt with either key.
+
+## 5. Devices
+
+### 5.1 Enrollment
+
+A device generates an Ed25519 identity key pair and enrolls with `POST /api/devices {label, sign_pub}`. A session is bound to a device when it enrolls it or uploads an encryption key for it; clients MUST upload their current encryption key after each sign-in.
+
+### 5.2 Encryption keys
+
+A device generates an X25519 key pair when it has none or its newest key is older than 86400 seconds, and uploads it with a certificate:
+
+```
+enc_sig = Ed25519(identity private key, "caw-enc-v1" || UTF-8(device id) || 0x00 || enc_pub || u64be(created_at))
+```
+
+`created_at` is the current time. A device MUST delete an encryption private key when `created_at + 86400 + ttl_max` has passed, where `ttl_max` is the server's maximum message lifetime, except its newest key.
+
+### 5.3 Device lists
+
+A device list entry is valid only if `enc_pub` is present and `enc_sig` verifies with `sign_pub` over the input in [5.2](#52-encryption-keys). Senders MUST NOT encrypt for invalid entries.
+
+### 5.4 Known devices
+
+Each device keeps, for its own account, a record per device id: encryption public keys observed (from `keys` and `enc_pub` in `GET /api/devices`), identity key, label, and the time last listed. Records not listed for `ttl_max + 86400` seconds are dropped. A device listed with an id not in the records, other than the device itself, created at or after the device's own enrollment, is a new device; the client SHOULD notify the user. On first use, records are populated without notification.
+
+### 5.5 Device check
+
+For each message the device reads, where `own` is `to` for a message received through one of the account's links and `from` for a sent copy:
+
+1. If the message was created before the device's own enrollment, stop.
+2. Every stanza with `o = own` MUST name a device in the known records with `k` among its observed keys.
+3. If a stanza fails, refetch the device list and repeat step 2. If it still fails, the client MUST warn the user.
+
+## 6. Contacts
+
+### 6.1 Links
+
+A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Servers return `410` for unknown and revoked link ids.
+
+### 6.2 Pairing code
+
+```
+code = "caw:1:" b64(UTF-8(JSON({ "v": 1, "s": <server>, "t": <ticket>, "a": <account id>, "n": <display name> })))
+```
+
+The ticket is obtained with `POST /api/pairings`. It is single use and expires at `expires_at`.
+
+### 6.3 Pairing
+
+Account A shows a code; account B enters it.
+
+1. B MUST reject a code whose `s` and `a` are its own, or that identifies an existing contact.
+2. B creates link L_B for A on its server: `POST /api/links {peer_server: s, peer_account: a}`.
+3. B redeems the ticket on A's server: `POST {s}/api/pairings/redeem {ticket, peer_server, peer_account}`, receiving L_A. On failure B revokes L_B.
+4. B reads A's device list through L_A and MUST verify that `account` equals `a`.
+5. B sends through L_A a message with plaintext `{"t": "hello", "card": {server, account, name, link_id, token}}`, where the card describes B and L_B, and then stores the contact with `status: "pending"`.
+6. A device of A that receives a message on a link with no contact treats it as a possible hello. It decrypts it, reads the device list from `card.server` with the card's link, MUST verify that `account` equals `card.account` and that the message signature verifies with a listed device, and then presents the request with the verification words for the link the message arrived on.
+7. Accept: A stores the contact with `status: "active"`, `in` the arrival link, `out` the card's link, and sends `{"t": "accept"}`. Decline: A sends `{"t": "decline"}` and revokes the arrival link.
+8. B sets `status: "active"` on `accept`, and removes the contact and revokes L_B on `decline`. B SHOULD remove a contact still pending after 1800 seconds and revoke L_B.
+
+### 6.4 Verification words
+
+```
+bytes = PBKDF2-HMAC-SHA256(password = "caw-words-v1" || UTF-8(link id), salt = "caw-words-v1", iterations = 65536, length = 6)
+words = [ wordlist[b] for b in bytes ]
+```
+
+`link id` is L_A. `wordlist` is `protocol/words.txt`, 256 lines.
+
+### 6.5 Removal
+
+To remove a contact, a client revokes `in` (`DELETE /api/links/{in}`), requests `DELETE /api/link` with `out` on the contact's server, and records a removal in the vault. On `link_removed` for a contact's `in`, the client removes the contact and requests `DELETE /api/link` with `out`. On `410` from the contact's server, the client removes the contact. On `link_revoked`, clients remove the contact or pending request with that `in`.
+
+## 7. Messages
+
+### 7.1 Plaintext
+
+A JSON object with type `t`:
+
+| `t` | fields |
+|---|---|
+| `text` | `text`: string |
+| `media` | `kind`: `"image"` or `"video"`; `mime`: string; `blob`: blob id; `key`: `b64` of 32 bytes; `size`: integer; `w`, `h`: integers; `dur`: integer seconds (video); `thumb`: standard base64 JPEG; `text`: string, optional |
+| `call` | `outcome`: `"answered"`, `"missed"` or `"declined"`; `secs`: integer, when answered |
+| `hello` | `card`: `{server, account, name, link_id, token}` |
+| `accept`, `decline`, `bye` | none |
+| `timer` | `ttl`: integer seconds |
+
+`hello`, `accept`, `decline`, `timer` and `bye` are control messages and are not displayed.
+
+### 7.2 Encryption
+
+1. `id` is a new UUID. Retries of the same message MUST reuse it.
+2. `ck` is 16 random bytes and `nonce` 12 random bytes.
+3. `body = b64(nonce || AES-128-GCM(ck, nonce, aad = UTF-8(id), UTF-8(JSON(plaintext))))`.
+4. For each recipient device: `w = b64(enc || ct)` where `(enc, ct) = HPKE.SealBase(pkR = enc_pub, info = "caw-message-key-v1", aad = UTF-8(id), pt = ck)`. `enc` and `ct` are 32 bytes each.
+5. Each stanza is `{d: device id, k: b64(enc_pub), w, o}`.
+
+### 7.3 Recipients
+
+- `o = "to"`: every valid device in the recipient's list, read through the link. The list MAY be cached for up to 60 seconds.
+- `o = "from"`: every valid device in the sender's own list, with the sending device included using its newest key.
+
+### 7.4 Signature
+
+```
+sig = b64(Ed25519(identity private key of from_device, input))
+input = "caw-message-v1" LF id LF from_device LF ttl LF body LF stanzas
+stanzas = for each stanza sorted by d: d ":" k ":" w ":" o, joined with ","
+```
+
+`ttl` is in decimal. Sorting compares `d` by code units.
+
+### 7.5 Delivery
+
+The sender posts `{id, from_device, ttl, body, keys, sig, blobs}` to `POST /api/link/mail` on the recipient's server.
+
+| response | sender action |
+|---|---|
+| 200 | delivered; then `POST /api/sent {contact: <contact id>}` on its own server |
+| 409 | delivered by an earlier attempt |
+| 412 | reread the recipient's device list without cache, encrypt again with the same `id`, post once more |
+| 410 | the contact is gone ([6.5](#65-removal)) |
+| network error, 5xx, 429 | keep the message queued and retry later; honor `Retry-After` |
+
+Queued messages are discarded once `at + ttl` has passed, where `at` is the time the message was queued.
+
+### 7.6 Reading
+
+1. Find the stanza with `d` equal to the device's id and the private key whose public key equals `k`. If absent, the message is unreadable.
+2. Verify `sig` over the input in [7.4](#74-signature) with the identity key of `from_device`: for received messages, from the sender's server's device list read through `out`; for sent copies, from the device's own known records. Clients SHOULD retain identity keys of devices they have seen. If verification fails, the message is unreadable.
+3. `ck = HPKE.OpenBase(enc, skR, info = "caw-message-key-v1", aad = UTF-8(id), ct)`, then decrypt `body`.
+4. Run the device check ([5.5](#55-device-check)).
+
+Messages with an `id` already held are ignored. Received messages are read from `GET /api/mail` and the `mail` event; sent copies from `GET /api/link/mail` on each contact's server, and again for a contact named in a `sent` event.
+
+### 7.7 Expiry
+
+The recipient's server stores a message until `created_at` plus `ttl` limited to its configured minimum and maximum, and returns that time as `expires_at`. Clients MUST discard messages at `expires_at` and SHOULD keep messages in memory only.
+
+### 7.8 Message lifetime per conversation
+
+New messages use the contact's `ttl`, or the server default. Changing it sets the contact's `ttl` and sends `{"t": "timer", "ttl"}`. A device receiving `timer` sets the contact's `ttl`.
+
+### 7.9 Control messages
+
+| `t` | receiver action |
+|---|---|
+| `hello` | [6.3](#63-pairing) step 6 |
+| `accept` | set the pending contact `active` |
+| `decline` | remove the contact; revoke `in` |
+| `timer` | set the contact's `ttl` |
+| `bye` | remove the contact; revoke `in` |
+
+All devices of the receiving account process control messages; vault timestamps follow [4.3](#43-merge).
+
+### 7.10 Attachments
+
+1. Generate a 32-byte `key`. The file is `nonce || AES-256-GCM(key, nonce, aad = "caw-blob-v1", bytes)`.
+2. Upload it with `POST /api/link/blobs` to the recipient's server; the response gives the blob id.
+3. Send a `media` message carrying the blob id and `key`, with `blobs: [<blob id>]` in the POST body. `blobs` is not signed.
+4. The recipient account downloads with `GET /api/blobs/{id}`; the sender's devices with `GET /api/link/blobs/{id}`.
+
+Clients SHOULD reduce images to 1600 pixels on the longest side and re-encode them without metadata, and SHOULD transcode video to 720p or lower. `thumb` SHOULD be at most 64 pixels on the longest side.
+
+## 8. Calls
+
+### 8.1 Flow
+
+The caller connects to the callee's server at `/api/link/ws?link=<link id>.<token>&client=<client id>` and the callee's devices are connected to their own server at `/ws`. Each side obtains ICE servers from its own server with `GET /api/turn`.
+
+1. Caller sends `{"type": "call", "call_id": <uuid>}` and receives `ringing`.
+2. Each callee connection receives `incoming {call_id, link_id}`; a push of type `call` is sent. The device maps `link_id` to the contact whose `in` equals it. A device that is already in a call, or has no contact for the link, MUST NOT respond, so that the account's other devices can answer.
+3. A callee device answers with `accept`. It receives `joined {call_id, peers}`; the caller receives `peer_joined`. Other callee connections receive `ended` with reason `answered_elsewhere`.
+4. A callee device MAY send `reject` at the user's request before any device answers; the caller receives `declined` and the call ends for all devices.
+5. Either side ends the call with `hangup`. An unanswered call ends after the server's ring timeout with reason `no_answer`.
+
+### 8.2 Signaling
+
+`{"type": "signal", "call_id", "to": <peer id>, "data"}` is delivered to the peer as `{"type": "signal", "call_id", "from": <peer id>, "data"}`. `data` is one of:
+
+| data | |
+|---|---|
+| `{"sdp": {"type", "sdp"}, "device", "sig"}` | session description, signed |
+| `{"candidate": {...}}` | ICE candidate (`RTCIceCandidateInit`) |
+| `{"restart": true}` | request for an ICE restart |
+
+Every session description is signed by the sending device:
+
+```
+sig = b64(Ed25519(identity private key of device, "caw-call-v1" LF call_id LF type LF sdp))
+```
+
+Before applying a session description, the receiver MUST verify `sig` with the identity key of `device` as listed for the other party's account by that account's server, read through the contact's `out` link, and MUST end the call if verification fails. The signature covers the DTLS fingerprint, so a server relaying the call cannot substitute its own. ICE candidates are not signed.
+
+The device that receives `joined` sends an offer to each listed peer and is the offerer for that peer. Only the offerer restarts ICE; the other side requests a restart with `{"restart": true}`.
+
+### 8.3 Reconnection
+
+A connection that closes during a call keeps its place for 30 seconds. A client reconnecting with the same `client` id resumes it; `hello` lists the calls the connection is in. A client SHOULD restart ICE for calls listed and end calls not listed.
+
+### 8.4 Call record
+
+After a call in which the callee's devices were rung, the caller sends a `call` message with the outcome and, if answered, the duration in seconds. No record is sent for a call ended by a failed verification.
+
+## 9. Push notifications
+
+Clients register a WebPush endpoint (RFC 8030) created with the server's VAPID public key from `GET /api/config`, together with a P-256 public key and a 16-byte authentication secret (RFC 8291). Payloads:
+
+| payload | client action |
+|---|---|
+| `{"type": "mail"}` | fetch `GET /api/mail` and notify |
+| `{"type": "call", "call_id"}` | connect the WebSocket; the call arrives in `hello` |
+| `{"type": "cancel", "call_id"}` | stop ringing for `call_id` |
+
+Clients MUST discard payloads that fail to decrypt.
+
+## 10. Server requirements
+
+- Servers MUST store session tokens, link tokens and tickets only as hashes, and login keys only as a salted slow hash.
+- For an unknown username, `POST /api/auth/salt` MUST return a salt that is stable for that username and indistinguishable from a real one.
+- Servers MUST reject `POST /api/link/mail` with `412` when the stanzas with `o = "to"` do not include every device of the account that has an encryption key.
+- Servers MUST delete messages and attachments at `expires_at`, and SHOULD do so in a way that does not leave the data recoverable from the database file.
+- Servers MUST keep each device's encryption public keys for at least `ttl_max + 86400` seconds after they are replaced and return them in `keys`.
+- Servers MUST deliver `mail` to all connections and push endpoints of the account, and `sent`, `vault`, `devices`, `link_removed` and `link_revoked` to all of the account's connections.
+- Removing or expiring a device MUST delete its sessions and close their connections.
+- Servers SHOULD encrypt stored vaults and wrapped keys with a secret held outside the database.
+- Servers SHOULD rate limit as listed in [api.md](api.md#limits).
+
+## 11. Client storage
+
+- Identity and encryption private keys SHOULD be non-exportable or encrypted with a platform key store.
+- The data key, contacts and queued messages SHOULD be encrypted at rest with a device-bound key.
+- Decrypted messages SHOULD be held in memory only; decrypted attachments, if cached, MUST be deleted at the message's `expires_at`.
+- Signing out MUST delete the data key and SHOULD delete contacts, queued messages and known-device records.
+
+## 12. Test vectors
+
+Argon2id, `m = 65536, t = 3, p = 1`, password `correct horse battery staple`, salt `AAECAwQFBgcICQoLDA0ODw`:
+
+```
+login key    = 9YPGbrDJg_a-DxgB00WA26bOORo13vYf7QQ8Nl3DfFI
+password key = 8cKBUJdhXyGHl-1XTHCE7SH9Jgm40LNwa__U3sfmrrg
+```
+
+Verification words, link id `6f1c2a4e-0b7d-4e8a-9c3f-2d5e8a1b7c90`:
+
+```
+koala blanket plum ankle ribbon bunny
+```
+
+Signature input for `id = "id"`, `from_device = "dev-a"`, `ttl = 86400`, `body = "body"`, stanzas `(dev-b, kb, wb, to)` and `(dev-a, ka, wa, from)`:
+
+```
+caw-message-v1
+id
+dev-a
+86400
+body
+dev-a:ka:wa:from,dev-b:kb:wb:to
+```
+
+Session description signature input for `call_id = "call-id"`, `type = "offer"`, `sdp = "v=0"`:
+
+```
+caw-call-v1
+call-id
+offer
+v=0
+```
+
+HPKE open, `info = "caw-message-key-v1"`, `aad = "message-id"`:
+
+```
+skR = t95UAESODeP3F2-yxoye38Lon_Ijq82us7_Zd28Bbs0
+pkR = tarVPutDGeHZEOwEQPhJ0Z4KOqn-O8uRNCvYDkiDV1U
+w   = yh9lYMmDB0ihEzkBytN2OU7SEf1Nl9yyccDaIig3iRXLixXnFr8dsoDan4bHYixUDCg8j9SxBYKu-LMcLN_J2Q
+pt  = BwcHBwcHBwcHBwcHBwcHBw
+```
+
+These vectors are checked by `web/test/crypto.test.ts`, `android/app/src/test/java/com/radcrow/caw/sealed/CryptoTest.kt` and `server/src/webpush.rs`.

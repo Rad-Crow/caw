@@ -1,0 +1,4 @@
+-keep class org.webrtc.** { *; }
+-dontwarn org.webrtc.**
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**

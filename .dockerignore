@@ -1,0 +1,8 @@
+.*
+**/node_modules
+**/target
+web/dist
+android
+data
+*.db
+*.db-*

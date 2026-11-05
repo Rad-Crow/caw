@@ -1,0 +1,4 @@
+{$CAW_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy caw:8080
+}
