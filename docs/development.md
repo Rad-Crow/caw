@@ -11,7 +11,7 @@
 | `deploy/` | coturn and Caddy configuration, container entrypoint |
 | `e2e/` | browser end-to-end test |
 | `examples/` | `.env` templates |
-| `docs/` | white paper, protocol specification, API reference, guides |
+| `docs/` | white paper, protocol specification, API reference, guides, screenshots |
 
 ## Running locally
 

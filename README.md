@@ -8,6 +8,10 @@ Private, self-hosted, ephemeral audio calls and messages. End-to-end encrypted.
 - End-to-end encrypted: messages and calls are accessible only to their participants.
 - Web and Android: available as a web application and an Android app, with support for multiple devices.
 
+<a href="docs/screenshots.md"><img src="android/fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" alt="Contact list in the Android app" width="250"></a>
+
+[More screenshots](docs/screenshots.md)
+
 ## How it works
 
 - Host your own server for yourself, your friends, or your community.
@@ -28,6 +32,7 @@ Private, self-hosted, ephemeral audio calls and messages. End-to-end encrypted.
 
 | document | contents |
 |---|---|
+| [Screenshots](docs/screenshots.md) | Android app |
 | [White paper](docs/whitepaper.md) | design and security |
 | [Protocol specification](docs/protocol.md) | formats and behavior for compatible clients and servers |
 | [API reference](docs/api.md) | server endpoints and WebSocket events |
