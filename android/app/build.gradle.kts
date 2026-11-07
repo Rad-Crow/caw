@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val abi = providers.gradleProperty("abi").orNull
+// order matters: f-droid installs the highest compatible versionCode
+val abiCodes = mapOf("armeabi-v7a" to 1, "x86" to 2, "arm64-v8a" to 3, "x86_64" to 4)
+
 android {
     namespace = "com.radcrow.caw"
     compileSdk = 35
@@ -14,8 +18,10 @@ android {
         applicationId = "com.radcrow.caw"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
+        versionCode = versionCode!! * 10 + (abi?.let { abiCodes.getValue(it) } ?: 0)
+        abi?.let { a -> ndk { abiFilters += a } }
     }
 
     // shared debug key for container and IDE builds so installs update in place

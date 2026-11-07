@@ -38,3 +38,11 @@ Building without a local SDK: [android/README.md](../android/README.md).
 ## Releases
 
 Tags: `android-vX.Y.Z` (built by F-Droid) and `server-vX.Y.Z`.
+
+Android release:
+
+- raise `versionCode` and `versionName` in `android/app/build.gradle.kts`
+- add `android/fastlane/metadata/android/en-US/changelogs/<versionCode * 10 + 4>.txt`
+- tag `android-vX.Y.Z`
+
+An APK's versionCode is `versionCode * 10 + n`: universal 0, armeabi-v7a 1, x86 2, arm64-v8a 3, x86_64 4. `-Pabi=<abi>` builds a single-ABI APK, which is what F-Droid builds; without it the build is universal.
