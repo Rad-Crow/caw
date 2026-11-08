@@ -11,7 +11,7 @@ const browser = await chromium.launch({
 let rawMic = 0
 const ctx = async (name) => {
   const c = await browser.newContext({ permissions: ['microphone'], viewport: { width: 1100, height: 700 } })
-  // tracks websockets so a test can drop one
+  // tracks websockets and peer connections so tests can reach them
   await c.addInitScript(() => {
     const W = window.WebSocket
     window.__ws = []
@@ -19,6 +19,14 @@ const ctx = async (name) => {
       constructor(...a) {
         super(...a)
         window.__ws.push(this)
+      }
+    }
+    const P = window.RTCPeerConnection
+    window.__pcs = []
+    window.RTCPeerConnection = class extends P {
+      constructor(...a) {
+        super(...a)
+        window.__pcs.push(this)
       }
     }
   })
@@ -349,6 +357,11 @@ await b.getByRole('button', { name: 'Answer' }).click()
 await a.locator('.callbar', { hasText: /\d:\d\d/ }).waitFor({ timeout: 15000 })
 await b.locator('.callbar', { hasText: /\d:\d\d/ }).waitFor({ timeout: 15000 })
 step('call connected on both sides')
+
+const sendCodec = (p) => p.evaluate(() => window.__pcs.at(-1).getSenders()[0].getParameters().codecs[0]?.mimeType)
+const codecs = [await sendCodec(a), await sendCodec(b)]
+if (codecs.some((m) => m !== 'audio/red')) throw new Error(`audio sent as ${codecs.join(', ')}, not with redundancy`)
+step('audio sent with redundancy both ways')
 
 const before = await a.locator('.callbar .small').textContent()
 await a.evaluate(() => window.__ws.at(-1).close())
