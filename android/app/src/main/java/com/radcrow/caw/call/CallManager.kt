@@ -72,6 +72,7 @@ class CallManager(private val app: CawApp) {
         val speaker: Boolean = false,
         val startedAt: Long? = null,
         val reconnecting: Boolean = false,
+        val held: Boolean = false,
     )
 
     val incoming = MutableStateFlow<Incoming?>(null)
@@ -213,8 +214,21 @@ class CallManager(private val app: CawApp) {
 
     fun mutedBySystem(callId: String, muted: Boolean) = post {
         val a = active.value?.takeIf { it.id == callId && it.muted != muted } ?: return@post
-        track?.setEnabled(!muted)
-        active.value = a.copy(muted = muted)
+        setState(a.copy(muted = muted))
+    }
+
+    fun holdFromSystem(callId: String, held: Boolean) = post {
+        val a = active.value?.takeIf { it.id == callId && it.held != held } ?: return@post
+        setState(a.copy(held = held))
+    }
+
+    fun resume() = post {
+        val a = active.value?.takeIf { it.held } ?: return@post
+        if (app.telecom.inCall && !app.telecom.resume()) {
+            notices.tryEmit("Can't resume the call.")
+            return@post
+        }
+        setState(a.copy(held = false))
     }
 
     fun route(ep: androidx.core.telecom.CallEndpointCompat) = app.telecom.route(ep)
@@ -241,8 +255,13 @@ class CallManager(private val app: CawApp) {
 
     fun toggleMute() = post {
         val a = active.value ?: return@post
-        track?.setEnabled(a.muted)
-        active.value = a.copy(muted = !a.muted)
+        setState(a.copy(muted = !a.muted))
+    }
+
+    private fun setState(a: Active) {
+        active.value = a
+        track?.setEnabled(!a.muted && !a.held)
+        peers.values.forEach { p -> p.pc.receivers.forEach { it.track()?.setEnabled(!a.held) } }
     }
 
     fun toggleSpeaker() = post {
