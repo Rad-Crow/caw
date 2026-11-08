@@ -35,6 +35,12 @@ interface PeerConn {
 // max time a call stays "reconnecting" before it ends
 const RECOVER_MS = 30_000
 
+function preferRed(t: RTCRtpTransceiver) {
+  const codecs = RTCRtpReceiver.getCapabilities?.('audio')?.codecs ?? []
+  const red = codecs.filter((c) => c.mimeType.toLowerCase() === 'audio/red')
+  if (red.length && 'setCodecPreferences' in t) t.setCodecPreferences([...red, ...codecs.filter((c) => !red.includes(c))])
+}
+
 const REASONS: Record<string, string> = {
   declined: 'Call declined',
   no_answer: 'No answer',
@@ -203,6 +209,7 @@ class CallManager {
     audio.autoplay = true
     const p: PeerConn = { pc, audio, pending: [], offerer: false, retry: null }
     if (this.local) for (const t of this.local.getTracks()) pc.addTrack(t, this.local)
+    for (const t of pc.getTransceivers()) preferRed(t)
     pc.onicecandidate = (e) => {
       if (e.candidate && this.active) {
         this.send({

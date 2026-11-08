@@ -46,6 +46,7 @@ import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
@@ -443,7 +444,15 @@ class CallManager(private val app: CawApp) {
             override fun onRenegotiationNeeded() {}
         }) ?: throw IOException("connection setup failed")
         pc.addTrack(localTrack(), listOf("caw"))
+        preferRed(pc)
         return PeerConn(pc).also { peers[peerId] = it }
+    }
+
+    private fun preferRed(pc: PeerConnection) {
+        val (red, rest) = factory().getRtpReceiverCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO).codecs
+            .partition { it.name.equals("red", ignoreCase = true) }
+        if (red.isEmpty()) return
+        pc.transceivers.forEach { it.setCodecPreferences(red + rest) }
     }
 
     private suspend fun onState(peerId: String, state: PeerConnection.PeerConnectionState) {
