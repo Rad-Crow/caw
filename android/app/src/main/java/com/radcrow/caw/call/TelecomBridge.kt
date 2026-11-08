@@ -4,9 +4,11 @@ import android.net.Uri
 import android.telecom.DisconnectCause
 import android.util.Log
 import androidx.core.telecom.CallAttributesCompat
+import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
 import com.radcrow.caw.CawApp
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,12 +18,13 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 // registers calls with Android Telecom so cars, headsets and the system treat them as phone calls
 class TelecomBridge(private val app: CawApp) {
     private sealed interface Cmd {
         data object Answer : Cmd
-        data object Active : Cmd
+        data class Active(val done: CompletableDeferred<Boolean>? = null) : Cmd
         data class Route(val ep: CallEndpointCompat) : Cmd
         data class End(val cause: Int) : Cmd
     }
@@ -59,8 +62,8 @@ class TelecomBridge(private val app: CawApp) {
                     attrs,
                     onAnswer = { app.calls.acceptFromSystem(callId) },
                     onDisconnect = { app.calls.endFromSystem(callId) },
-                    onSetActive = {},
-                    onSetInactive = {},
+                    onSetActive = { app.calls.holdFromSystem(callId, false) },
+                    onSetInactive = { app.calls.holdFromSystem(callId, true) },
                 ) {
                     val call = this
                     launch { currentCallEndpoint.collect { endpoint.value = it } }
@@ -70,7 +73,10 @@ class TelecomBridge(private val app: CawApp) {
                         for (c in ch) {
                             when (c) {
                                 Cmd.Answer -> answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
-                                Cmd.Active -> setActive()
+                                is Cmd.Active -> {
+                                    val ok = setActive() is CallControlResult.Success
+                                    c.done?.complete(ok)
+                                }
                                 is Cmd.Route -> requestEndpointChange(c.ep)
                                 is Cmd.End -> {
                                     disconnect(DisconnectCause(c.cause))
@@ -99,7 +105,13 @@ class TelecomBridge(private val app: CawApp) {
     }
 
     fun active() {
-        cmds?.trySend(Cmd.Active)
+        cmds?.trySend(Cmd.Active())
+    }
+
+    suspend fun resume(): Boolean {
+        val done = CompletableDeferred<Boolean>()
+        cmds?.trySend(Cmd.Active(done)) ?: return false
+        return withTimeoutOrNull(5000) { done.await() } ?: false
     }
 
     fun route(ep: CallEndpointCompat) {

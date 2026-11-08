@@ -26,7 +26,9 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -174,6 +176,7 @@ private fun CallScreen(onAnswer: () -> Unit, onDone: () -> Unit) {
                 val status = when {
                     a == null && incoming != null -> "Incoming call"
                     a == null -> ""
+                    a.held -> "On hold"
                     a.reconnecting -> "Reconnecting..."
                     a.status == CallManager.Status.ACTIVE && a.startedAt != null -> {
                         val s = (now - a.startedAt) / 1000
@@ -188,8 +191,14 @@ private fun CallScreen(onAnswer: () -> Unit, onDone: () -> Unit) {
             val a = active
             if (a != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-                    FilledTonalIconToggleButton(a.muted, { calls.toggleMute() }, Modifier.size(64.dp)) {
-                        Icon(if (a.muted) Icons.Default.MicOff else Icons.Default.Mic, "Mute")
+                    if (a.held) {
+                        FilledTonalIconButton({ calls.resume() }, Modifier.size(64.dp)) {
+                            Icon(Icons.Default.PlayArrow, "Resume")
+                        }
+                    } else {
+                        FilledTonalIconToggleButton(a.muted, { calls.toggleMute() }, Modifier.size(64.dp)) {
+                            Icon(if (a.muted) Icons.Default.MicOff else Icons.Default.Mic, "Mute")
+                        }
                     }
                     RoundButton(Icons.Default.CallEnd, "Hang up", Color(0xFFDC2626)) { calls.hangup() }
                     AudioRoute(a.speaker) { calls.toggleSpeaker() }
