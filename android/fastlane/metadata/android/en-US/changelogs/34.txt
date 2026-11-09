@@ -1,0 +1,2 @@
+Calls send redundant audio, so brief packet loss is less noticeable.
+Answering another call puts a Caw call on hold; it can be resumed from the call screen.

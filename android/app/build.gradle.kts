@@ -18,8 +18,8 @@ android {
         applicationId = "com.radcrow.caw"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
         versionCode = versionCode!! * 10 + (abi?.let { abiCodes.getValue(it) } ?: 0)
         abi?.let { a -> ndk { abiFilters += a } }
     }
