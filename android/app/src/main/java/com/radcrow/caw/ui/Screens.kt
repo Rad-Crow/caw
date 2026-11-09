@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
@@ -98,7 +99,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.radcrow.caw.CawEvent
 import com.radcrow.caw.Message
 import com.radcrow.caw.app
-import com.radcrow.caw.Contact
+import com.radcrow.caw.Remote
 import com.radcrow.caw.fmtLeft
 import com.radcrow.caw.fmtTtl
 import com.radcrow.caw.sealed.OwnDevice
@@ -128,6 +129,7 @@ fun Root(activity: MainActivity) {
     var screen by rememberSaveable { mutableStateOf("home") }
     var chatWith by rememberSaveable { mutableStateOf<Long?>(null) }
     var setupBack by rememberSaveable { mutableStateOf("home") }
+    var adding by rememberSaveable { mutableStateOf<Long?>(null) }
     val openUser by activity.openUser.collectAsStateWithLifecycle()
 
     LaunchedEffect(openUser) {
@@ -150,10 +152,11 @@ fun Root(activity: MainActivity) {
     when {
         me == null -> LoginScreen()
         me?.mustChange == true -> ChoosePasswordScreen()
+        adding != null -> NewGroupScreen(adding, onDone = { adding = null }, onBack = { adding = null })
         chatWith != null -> ChatScreen(chatWith!!, activity, onDevices = {
             chatWith = null
             screen = "settings"
-        }) { chatWith = null }
+        }, onAddMembers = { adding = chatWith }) { chatWith = null }
         screen == "setup" -> SetupScreen(activity, onBack = { screen = setupBack }) {
             me?.let { app.prefs.markSetupShown(it.id) }
             screen = setupBack
@@ -173,6 +176,14 @@ fun Root(activity: MainActivity) {
             },
             onBack = { screen = "home" },
         )
+        screen == "group" -> NewGroupScreen(
+            null,
+            onDone = {
+                screen = "home"
+                chatWith = it
+            },
+            onBack = { screen = "home" },
+        )
         else -> HomeScreen(
             activity,
             onOpen = { chatWith = it },
@@ -181,6 +192,7 @@ fun Root(activity: MainActivity) {
                 chatWith = it
             },
             onAdd = { screen = "add" },
+            onGroup = { screen = "group" },
             onSettings = { screen = "settings" },
             onSetup = {
                 setupBack = "home"
@@ -262,12 +274,14 @@ fun HomeScreen(
     onOpen: (Long) -> Unit,
     onMessage: (Long) -> Unit,
     onAdd: () -> Unit,
+    onGroup: () -> Unit,
     onSettings: () -> Unit,
     onSetup: () -> Unit,
 ) {
     val setup = rememberSetupState()
     val app = LocalContext.current.app
     val contacts by app.repo.contacts.collectAsStateWithLifecycle()
+    val groups by app.repo.groups.collectAsStateWithLifecycle()
     val messages by app.repo.messages.collectAsStateWithLifecycle()
     val opened by app.repo.opened.collectAsStateWithLifecycle()
     val seen by app.repo.seen.collectAsStateWithLifecycle()
@@ -278,7 +292,7 @@ fun HomeScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var showAll by rememberSaveable { mutableStateOf(false) }
 
-    val all = remember(messages, opened, contacts, seen, favorites, query) { app.repo.contactIds(query) }
+    val all = remember(messages, opened, contacts, groups, seen, favorites, query) { app.repo.contactIds(query) }
     val ids = if (showAll || query.isNotBlank()) all else all.take(LIMIT)
 
     Scaffold(
@@ -299,11 +313,20 @@ fun HomeScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onAdd,
-                icon = { Icon(Icons.Default.PersonAdd, null) },
-                text = { Text("Add contact") },
-            )
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ExtendedFloatingActionButton(
+                    onClick = onGroup,
+                    icon = { Icon(Icons.Default.Group, null) },
+                    text = { Text("New group") },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    icon = { Icon(Icons.Default.PersonAdd, null) },
+                    text = { Text("Add contact") },
+                )
+            }
         },
     ) { pad ->
         Column(Modifier.padding(pad)) {
@@ -317,20 +340,21 @@ fun HomeScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(50),
             )
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 160.dp)) {
                 item { SetupNotice(setup, onSetup) }
                 items(ids, key = { it }) { id ->
-                    val u = app.repo.peer(id) ?: return@items
+                    val grp = groups.any { it.num == id }
+                    val name = app.repo.name(id)
                     val active = contacts.find { it.num == id }?.status == "active"
                     val (preview, missed) = app.repo.preview(id)
                     val unread = app.repo.unread(id)
                     val last = messages[id]?.lastOrNull()?.raw?.createdAt
                     ListItem(
                         modifier = Modifier.clickable { onOpen(id) },
-                        leadingContent = { Avatar(u.name) },
+                        leadingContent = { Avatar(name, icon = if (grp) Icons.Default.Group else null) },
                         headlineContent = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(u.name, Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(name, Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (id in favorites) Icon(Icons.Default.Favorite, "Favorite", Modifier.padding(start = 4.dp).size(14.dp), tint = FavRed)
                                 last?.let { Text("  ${fmtTime(it)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             }
@@ -352,9 +376,11 @@ fun HomeScreen(
                                             .padding(horizontal = 8.dp, vertical = 2.dp),
                                     ) { Text("$unread", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelSmall) }
                                 }
-                                IconButton(onClick = { onMessage(id) }) { Icon(Icons.AutoMirrored.Filled.Message, "Message ${u.name}") }
-                                IconButton(onClick = { activity.call(u) }, enabled = calls == null && active) {
-                                    Icon(Icons.Default.Call, "Call ${u.name}")
+                                IconButton(onClick = { onMessage(id) }) { Icon(Icons.AutoMirrored.Filled.Message, "Message $name") }
+                                if (!grp) {
+                                    IconButton(onClick = { app.repo.peer(id)?.let(activity::call) }, enabled = calls == null && active) {
+                                        Icon(Icons.Default.Call, "Call $name")
+                                    }
                                 }
                             }
                         },
@@ -373,23 +399,25 @@ fun HomeScreen(
 private const val LIMIT = 50
 
 private sealed interface Item {
-    val at: Long
+    val at: Double
 
     data class N(val n: Message) : Item {
-        override val at get() = n.raw.createdAt
+        override val at get() = n.raw.createdAt.toDouble()
     }
 
-    data class E(val e: CawEvent) : Item {
+    data class E(val e: CawEvent, val i: Int) : Item {
         override val at get() = e.at
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBack: () -> Unit) {
+fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onAddMembers: () -> Unit, onBack: () -> Unit) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
     val contacts by app.repo.contacts.collectAsStateWithLifecycle()
+    val groups by app.repo.groups.collectAsStateWithLifecycle()
+    val loaded by app.repo.contactsLoaded.collectAsStateWithLifecycle()
     val messages by app.repo.messages.collectAsStateWithLifecycle()
     val events by app.repo.events.collectAsStateWithLifecycle()
     val config by app.repo.config.collectAsStateWithLifecycle()
@@ -409,12 +437,14 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
         }
     }
     val focus = remember { FocusRequester() }
-    val user = contacts.find { it.num == userId }?.let { app.repo.peer(it) }
-    val name = user?.name ?: ""
     val contact = contacts.find { it.num == userId }
-    val ttl = contact?.ttl ?: config.messageTtlDefault
+    val grp = groups.find { it.num == userId }
+    val user = contact?.let { app.repo.peer(it) }
+    val name = if (grp != null) app.repo.name(userId) else user?.name ?: ""
+    val ttl = grp?.g?.ttl?.v ?: contact?.ttl ?: config.messageTtlDefault
     val pendingContact = contact?.status == "pending"
-    val canSend = contact?.status == "active"
+    val waiting = grp != null && grp.g.inviter != null
+    val canSend = if (grp != null) !waiting else contact?.status == "active"
     val draft = drafts[userId].orEmpty()
     var timerOpen by remember { mutableStateOf(false) }
     var words by remember { mutableStateOf<List<String>?>(null) }
@@ -422,13 +452,14 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
     var removing by remember { mutableStateOf(false) }
     var wordsOpen by remember { mutableStateOf(false) }
     var contactOpen by remember { mutableStateOf(false) }
+    var groupOpen by remember { mutableStateOf(false) }
     val aliases by app.repo.aliases.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
 
     val outbox by app.repo.outbox.collectAsStateWithLifecycle()
     val shown = messages[userId].orEmpty()
     val pending = remember(outbox, shown) { app.repo.pendingFor(userId, shown) }
-    val items = ((shown + pending).map { Item.N(it) } + events[userId].orEmpty().map { Item.E(it) }).sortedBy { it.at }
+    val items = ((shown + pending).map { Item.N(it) } + events[userId].orEmpty().mapIndexed { i, e -> Item.E(e, i) }).sortedBy { it.at }
 
     BackHandler(onBack = onBack)
     LaunchedEffect(userId) {
@@ -450,8 +481,9 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
         }
     }
     LaunchedEffect(items.size) { if (items.isNotEmpty()) list.animateScrollToItem(0) }
+    LaunchedEffect(loaded, contact == null && grp == null) { if (loaded && contact == null && grp == null) onBack() }
 
-    if (contactOpen) {
+    if (contactOpen && contact != null) {
         var draftName by remember { mutableStateOf(name) }
         val aliased = userId in aliases
         AlertDialog(
@@ -491,6 +523,8 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
         )
     }
 
+    if (groupOpen && grp != null) GroupDialog(userId, onAddMembers, onClose = { groupOpen = false })
+
     LaunchedEffect(wordsOpen) {
         if (!wordsOpen || words != null) return@LaunchedEffect
         wordsFailed = false
@@ -525,22 +559,29 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
             TopAppBar(
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 title = {
-                    Column(Modifier.clickable { contactOpen = true }) {
+                    Column(Modifier.clickable { if (grp != null) groupOpen = true else contactOpen = true }) {
                         Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            if (pendingContact) "Waiting to accept" else user?.host.orEmpty(),
+                            when {
+                                waiting -> "Waiting to be added"
+                                grp != null -> app.repo.memberCount(userId)
+                                pendingContact -> "Waiting to accept"
+                                else -> user?.host.orEmpty()
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { app.repo.toggleFavorite(userId) }) {
-                        if (userId in favorites) Icon(Icons.Default.Favorite, "Remove favorite", tint = FavRed)
-                        else Icon(Icons.Default.FavoriteBorder, "Add favorite")
+                    if (grp == null) {
+                        IconButton(onClick = { app.repo.toggleFavorite(userId) }) {
+                            if (userId in favorites) Icon(Icons.Default.Favorite, "Remove favorite", tint = FavRed)
+                            else Icon(Icons.Default.FavoriteBorder, "Add favorite")
+                        }
                     }
                     Box {
-                        TextButton(onClick = { timerOpen = true }) {
+                        TextButton(onClick = { timerOpen = true }, enabled = !waiting) {
                             Icon(Icons.Default.Timer, null, Modifier.size(18.dp))
                             Text(" ${fmtTtl(ttl)}")
                         }
@@ -557,14 +598,16 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
                             }
                         }
                     }
-                    IconButton(onClick = { wordsOpen = true }) { Icon(Icons.Default.VerifiedUser, "Verification words") }
-                    if (user != null) IconButton(onClick = { activity.call(user) }) { Icon(Icons.Default.Call, "Call") }
+                    if (grp == null) {
+                        IconButton(onClick = { wordsOpen = true }) { Icon(Icons.Default.VerifiedUser, "Verification words") }
+                        if (user != null) IconButton(onClick = { activity.call(user) }) { Icon(Icons.Default.Call, "Call") }
+                    }
                 },
             )
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
-            DeviceAlert(userId, name, onDevices)
+            DeviceAlert(userId, name, grp != null, onDevices)
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
                 state = list,
@@ -572,7 +615,7 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(items.asReversed(), key = { if (it is Item.N) it.n.raw.id else "e${it.at}${(it as Item.E).e.text.hashCode()}" }) { it ->
+                items(items.asReversed(), key = { if (it is Item.N) it.n.raw.id else "e${(it as Item.E).i}" }) { it ->
                     when (it) {
                         is Item.E -> EventPill(it.e.text, null)
                         is Item.N -> {
@@ -587,7 +630,12 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
                                 }
                                 EventPill("${app.repo.callText(n)} - ${fmtTime(n.raw.createdAt)}", icon, missed)
                             } else {
-                                Bubble(n, p, n.raw.fromUser == me?.id, clock, contact)
+                                Bubble(
+                                    n, p, n.raw.fromUser == me?.id, clock,
+                                    sender = if (grp != null && n.raw.sender != null) app.repo.memberName(userId, n.raw.sender) else null,
+                                    sentTo = app.repo.mediaFrom(userId, n),
+                                    gone = app.repo.mediaGone(userId, n),
+                                )
                             }
                         }
                     }
@@ -608,9 +656,9 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onBa
                 }
             }
             HorizontalDivider()
-            if (pendingContact) {
+            if (pendingContact || waiting) {
                 Text(
-                    "Waiting for $name to accept.",
+                    if (waiting) "Waiting to be added to the group." else "Waiting for $name to accept.",
                     Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -667,9 +715,14 @@ private fun EventPill(text: String, icon: androidx.compose.ui.graphics.vector.Im
 }
 
 @Composable
-private fun Bubble(n: Message, p: Plain?, mine: Boolean, clock: Long, contact: Contact?) {
+private fun Bubble(n: Message, p: Plain?, mine: Boolean, clock: Long, sender: String?, sentTo: Remote?, gone: Boolean) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        if (p?.t == "media") MediaBubble(p, if (mine) contact else null)
+        sender?.let {
+            Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (p?.t == "media") {
+            if (gone) Unavailable() else MediaBubble(p, sentTo)
+        }
         if (p?.t != "media" || !p.text.isNullOrBlank()) Box(
             Modifier
                 .widthIn(max = 300.dp)
@@ -689,6 +742,18 @@ private fun Bubble(n: Message, p: Plain?, mine: Boolean, clock: Long, contact: C
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun Unavailable() {
+    Row(
+        Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(Icons.Default.Lock, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Attachment unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

@@ -5,8 +5,9 @@
   import { callText, store, type CawEvent, type Message } from '../lib/store.svelte'
   import Icon from '../lib/Icon.svelte'
   import Media from '../lib/Media.svelte'
+  import NewGroup from './NewGroup.svelte'
 
-  let { onadd }: { onadd: () => void } = $props()
+  let { onadd, ongroup }: { onadd: () => void; ongroup: () => void } = $props()
 
   type Item = { key: string; at: number } & ({ kind: 'message'; n: Message } | { kind: 'event'; e: CawEvent })
 
@@ -19,14 +20,24 @@
   let wordsOpen = $state(false)
   let contactOpen = $state(false)
   let aliasDraft = $state('')
+  let groupOpen = $state(false)
+  let addOpen = $state(false)
+  let nameDraft = $state('')
+  let removingMember = $state<string | null>(null)
+  let leaving = $state(false)
 
-  const peer = $derived(store.selected !== null ? (store.peer(store.selected) ?? null) : null)
+  const grp = $derived(store.selected !== null ? store.group(store.selected) : undefined)
+  const peer = $derived(
+    store.selected !== null
+      ? (store.peer(store.selected) ?? (grp ? { id: grp.num, host: store.memberCount(grp.num), name: store.userName(grp.num) } : null))
+      : null,
+  )
   const ttl = $derived(peer ? store.timerFor(peer.id) : 0)
   const contact = $derived(peer ? store.contact(peer.id) : undefined)
-  const pending = $derived(contact?.status === 'pending')
+  const pending = $derived(contact?.status === 'pending' || (!!grp && !store.joined(grp.num)))
   const attachment = $derived(peer ? store.attachments[peer.id] : undefined)
   const fmtSize = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
-  const canSend = $derived(contact?.status === 'active' && !store.deviceError)
+  const canSend = $derived((grp ? store.joined(grp.num) : contact?.status === 'active') && !store.deviceError)
   const presets = $derived(PRESETS.filter((p) => p >= store.config.message_ttl_min && p <= store.config.message_ttl_max))
   const items = $derived.by(() => {
     if (!peer) return []
@@ -44,6 +55,8 @@
     wordsOpen = false
     timerOpen = false
     contactOpen = false
+    groupOpen = false
+    addOpen = false
   })
 
   $effect(() => {
@@ -145,6 +158,40 @@
     await store.removeContact(peer.id)
   }
 
+  function toggleGroup() {
+    groupOpen = !groupOpen
+    removingMember = null
+    leaving = false
+    if (groupOpen && peer) nameDraft = peer.name
+  }
+
+  function saveGroupName(e: SubmitEvent) {
+    e.preventDefault()
+    groupOpen = false
+    if (peer) store.renameGroup(peer.id, nameDraft).catch((err) => store.flash(errText(err)))
+  }
+
+  async function removeMember(id: string) {
+    if (!peer) return
+    if (removingMember !== id) {
+      removingMember = id
+      return
+    }
+    removingMember = null
+    await store.removeMember(peer.id, id).catch((err) => store.flash(errText(err)))
+  }
+
+  async function leave() {
+    if (!peer) return
+    if (!leaving) {
+      leaving = true
+      return
+    }
+    leaving = false
+    groupOpen = false
+    await store.leaveGroup(peer.id).catch((err) => store.flash(errText(err)))
+  }
+
   async function toggleWords() {
     wordsOpen = !wordsOpen
     if (wordsOpen && peer && !words) {
@@ -164,6 +211,7 @@
       timerOpen = false
       wordsOpen = false
       contactOpen = false
+      groupOpen = false
     }
   }}
 />
@@ -172,8 +220,40 @@
   <section class="card caw">
     <div class="caw-head">
       <button class="icon-btn back" aria-label="Back" onclick={() => store.navigate('/')}><Icon name="arrow_back" /></button>
-      <span class="avatar">{peer.name.slice(0, 1).toUpperCase()}</span>
+      <span class="avatar">{#if grp}<Icon name="group" size={20} />{:else}{peer.name.slice(0, 1).toUpperCase()}{/if}</span>
       <div class="grow pop-anchor">
+        {#if grp}
+          <button class="contact-btn" aria-haspopup="dialog" aria-expanded={groupOpen} title="Group" onclick={toggleGroup}>
+            <strong>{peer.name}</strong>
+            <span class="muted small">{pending ? 'Waiting to be added' : peer.host}</span>
+          </button>
+          {#if groupOpen}
+            <div class="menu pop contact-pop group-pop" role="dialog" aria-label="Group">
+              {#if !pending}
+                <form onsubmit={saveGroupName}>
+                  <label>Name <input bind:value={nameDraft} maxlength="64" required /></label>
+                  <div class="pop-actions"><button class="btn filled">Save</button></div>
+                </form>
+                <div class="menu-label">Members</div>
+                <ul class="members">
+                  {#each store.groupMembers(peer.id) as m (m.id)}
+                    <li>
+                      <span class="grow">
+                        <span>{m.name}</span>
+                        {#if !m.me}<span class="muted small">{m.host}{m.contact ? ' \u00b7 Contact' : ''}</span>{/if}
+                      </span>
+                      {#if !m.me}
+                        <button class="btn text danger-text" onclick={() => removeMember(m.id)}>{removingMember === m.id ? 'Tap again' : 'Remove'}</button>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+                <button class="btn text" onclick={() => { groupOpen = false; addOpen = true }}><Icon name="person_add" size={18} />Add members</button>
+              {/if}
+              <button class="btn text danger-text" onclick={leave}>{leaving ? 'Tap again to leave' : 'Leave group'}</button>
+            </div>
+          {/if}
+        {:else}
         <button class="contact-btn" aria-haspopup="dialog" aria-expanded={contactOpen} title="Edit contact" onclick={toggleContact}>
           <strong>{peer.name}</strong>
           <span class="muted small">{pending ? 'Waiting to accept' : peer.host}</span>
@@ -191,7 +271,9 @@
             <button type="button" class="btn text danger-text" onclick={removeContact}>{removing ? 'Tap again to remove' : 'Remove contact'}</button>
           </form>
         {/if}
+        {/if}
       </div>
+      {#if !grp}
       <button
         class="icon-btn fav-btn"
         class:on={store.isFavorite(peer.id)}
@@ -202,6 +284,7 @@
       >
         <Icon name={store.isFavorite(peer.id) ? 'favorite' : 'favorite_border'} />
       </button>
+      {/if}
       <div class="pop-anchor">
         <button class="btn text timer-btn" aria-haspopup="menu" aria-expanded={timerOpen} onclick={() => (timerOpen = !timerOpen)} title="Message expiry" disabled={pending}>
           <Icon name="timer" size={18} />{fmtTtl(ttl)}
@@ -215,6 +298,7 @@
           </div>
         {/if}
       </div>
+      {#if !grp}
       <div class="pop-anchor">
         <button class="icon-btn" aria-label="Verification words" aria-expanded={wordsOpen} onclick={toggleWords}><Icon name="shield" /></button>
         {#if wordsOpen}
@@ -232,11 +316,12 @@
         {/if}
       </div>
       <button class="btn filled go" disabled={!!calls.active || !canSend} onclick={call}><Icon name="call" size={20} />Call</button>
+      {/if}
     </div>
 
     {#if store.deviceAlerts[peer.id]}
       <div class="banner notice" role="alert">
-        <p>A message with {peer.name} was also encrypted for a device that isn't yours.</p>
+        <p>A message {grp ? 'in' : 'with'} {peer.name} was also encrypted for a device that isn't yours.</p>
         <span>
           <button class="btn text" onclick={() => store.navigate('/account')}>Check your devices</button>
           <button class="btn text" onclick={() => store.dismissAlert(peer.id)}>Dismiss</button>
@@ -258,8 +343,12 @@
           </div>
         {:else}
           <div class="msg" class:mine={it.n.from_user === store.me?.id}>
-            {#if it.n.plain?.t === 'media'}
-              <Media m={it.n.plain} sentTo={it.n.from_user === store.me?.id ? store.remoteOf(peer.id) : undefined} />
+            {#if grp && it.n.sender}<div class="sender muted small">{store.memberName(peer.id, it.n.sender)}</div>{/if}
+            {#if it.n.plain?.t === 'media' && store.mediaGone(peer.id, it.n)}
+              <div class="bubble sealed"><Icon name="lock" size={14} />Attachment unavailable</div>
+              {#if it.n.plain.text}<div class="bubble">{it.n.plain.text}</div>{/if}
+            {:else if it.n.plain?.t === 'media'}
+              <Media m={it.n.plain} sentTo={store.mediaFrom(peer.id, it.n)} />
               {#if it.n.plain.text}<div class="bubble">{it.n.plain.text}</div>{/if}
             {:else if it.n.plain?.t === 'text'}
               <div class="bubble">{it.n.plain.text}</div>
@@ -271,7 +360,7 @@
         {/if}
       {:else}
         <div class="empty muted">
-          <span class="avatar big">{peer.name.slice(0, 1).toUpperCase()}</span>
+          <span class="avatar big">{#if grp}<Icon name="group" size={32} />{:else}{peer.name.slice(0, 1).toUpperCase()}{/if}</span>
           <p>No messages.</p>
           <p class="small">Messages expire after {fmtTtl(ttl)}.</p>
         </div>
@@ -279,7 +368,7 @@
     </div>
 
     {#if pending}
-      <div class="seal-count small"><Icon name="lock" size={14} />Waiting for {peer.name} to accept.</div>
+      <div class="seal-count small"><Icon name="lock" size={14} />{grp ? 'Waiting to be added to the group.' : `Waiting for ${peer.name} to accept.`}</div>
     {/if}
     {#if attachment}
       <div class="attachment">
@@ -324,10 +413,16 @@
       <button class="icon-btn filled" aria-label="Send" disabled={!canSend || (attachment ? attachment.status !== 'ready' : !store.drafts[peer.id]?.trim())}><Icon name="send" size={20} /></button>
     </form>
   </section>
+  {#if addOpen && grp}
+    <NewGroup group={peer.id} onclose={() => (addOpen = false)} />
+  {/if}
 {:else}
   <div class="empty muted landing">
     <Icon name="add_comment" size={56} />
     <p>{store.contacts.length ? 'Select a contact.' : 'Add a contact to start.'}</p>
-    <button class="btn tonal" onclick={onadd}><Icon name="person_add" size={20} />Add contact</button>
+    <span class="landing-actions">
+      <button class="btn tonal" onclick={onadd}><Icon name="person_add" size={20} />Add contact</button>
+      <button class="btn tonal" onclick={ongroup}><Icon name="group" size={20} />New group</button>
+    </span>
   </div>
 {/if}

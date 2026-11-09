@@ -4,7 +4,7 @@ White paper, version 1, November 2026
 
 ## Abstract
 
-Caw is a self-hosted system for one-to-one audio calls and expiring, end-to-end encrypted messages. Anyone can run a server, for themselves, their family and friends, or a larger community, and people on different servers can become contacts without the servers communicating with each other or exposing a user directory. Contacts are added only by pairing with a short-lived code, which creates capabilities that let each side reach the other's server directly. Messages are encrypted on the sending device for every device of both accounts and are deleted, together with the keys able to decrypt them, when they expire. Calls are encrypted between the two devices, with call setup signed by the devices' identity keys. Adding a device requires no linking or approval: each server acts as the device directory for its own accounts, and clients detect a server that adds devices by checking the device lists carried in every message. Contacts synchronize between a user's devices through a vault encrypted with a key derived from the password, which the server never receives.
+Caw is a self-hosted system for one-to-one audio calls and expiring, end-to-end encrypted messages between two people or in groups. Anyone can run a server, for themselves, their family and friends, or a larger community, and people on different servers can become contacts without the servers communicating with each other or exposing a user directory. Contacts are added only by pairing with a short-lived code, which creates capabilities that let each side reach the other's server directly. Messages are encrypted on the sending device for every device of both accounts and are deleted, together with the keys able to decrypt them, when they expire. Calls are encrypted between the two devices, with call setup signed by the devices' identity keys. Adding a device requires no linking or approval: each server acts as the device directory for its own accounts, and clients detect a server that adds devices by checking the device lists carried in every message. Contacts synchronize between a user's devices through a vault encrypted with a key derived from the password, which the server never receives.
 
 The protocol is specified in [protocol.md](protocol.md) and the server interface in [api.md](api.md).
 
@@ -66,6 +66,12 @@ A message is encrypted once with a random key, and that key is encrypted with HP
 
 The caller connects to the callee's server through its link, and the server rings all of the callee's devices; the first to answer takes the call. The server relays WebRTC signaling between the two devices, and each device signs its session descriptions with its identity key. Audio flows between the devices, encrypted with DTLS-SRTP, through TURN relays operated by each side's own server when a direct path is not available.
 
+### 3.5 Groups
+
+A group's members may be on different servers. Each member receives the group's messages on its own server through a group link, a capability whose token every member holds. The sender seals a separate copy for each member's devices and posts it to that member's server; its own copy goes to its own server, and attachments are uploaded once, to the sender's server.
+
+People join only when invited by a member who is their contact, and only after accepting. Any member can add its own contacts, remove members, rename the group and change its message lifetime. Each member's vault holds the group: the members, their links and the settings. Members send their full view to the others on every change, and every message carries a digest of the sender's member list, so views that differ are reconciled.
+
 ## 4. Design decisions
 
 ### 4.1 Capabilities instead of federation
@@ -112,6 +118,12 @@ Each call runs on the callee's server, the only server that can reach all of the
 
 The server relays the WebRTC session descriptions, which carry the fingerprints of the keys that encrypt the audio. Each device signs its session descriptions with its identity key, and the other device verifies the signature against the contact's device list before connecting. A server relaying a call therefore cannot substitute its own keys without listing an extra device, the same condition as for messages. Network candidates are not signed; altering them can prevent a call but not intercept it.
 
+### 4.7 Groups without a host
+
+A group could live on one server that stores its messages. Caw instead delivers every group message to each member's own server. Members keep receiving only from their own server, so notifications and connections are unchanged, each member's device list still comes from that member's server, and no server holds a group's traffic or depends on another operator's availability. The cost is that the sender posts one copy per member, so each server sets a maximum group size, ten by default, which its users' clients enforce.
+
+When a member leaves or is removed, every remaining member replaces its group token in place. The token is derived from a secret in the vault, so all of a member's devices compute the same one, and the previous token is accepted for 24 hours so messages already on their way arrive. A removed member's messages are discarded by the others.
+
 ## 5. Threat model
 
 Adversaries considered:
@@ -120,6 +132,7 @@ Adversaries considered:
 - a malicious or compromised home server, either the user's own or a contact's, including its operator
 - a holder of a leaked database or backup
 - a party that obtains a pairing code
+- a member of a group, including one that was removed
 - a device signed in to the account without the owner's consent
 
 Assumed trustworthy: the client software, the user's own devices and their operating system key stores.
@@ -154,6 +167,7 @@ The server is not trusted with message or attachment contents, the password, the
 | drop, delay or withhold messages | possible, not detected |
 | retain ciphertext past expiry | possible; unreadable once devices delete the keys |
 | replay a message | message ids are unique per mailbox, and clients drop duplicates |
+| move a group message to another conversation | not possible; the group and the sender are inside the signed message |
 | intercept or originate calls | requires listing an extra device for the contact; detected by the device check |
 | serve a modified web client | possible ([section 8](#8-limitations)) |
 
@@ -167,6 +181,8 @@ The server is not trusted with message or attachment contents, the password, the
 | leaked pairing code | single use and expiring; the owner must accept the request, and the verification words reveal a substitution |
 | unrecognized device | removed by the owner, which signs it out, changes the password and replaces the data key |
 | unsolicited messages | require a link; links are rate limited and revocable |
+| a group member | can add and remove members and introduce people the others have not paired with; cannot change another member's identity or link |
+| a removed group member | its messages are discarded; the group tokens it holds are replaced, and the previous ones expire after 24 hours |
 
 ## 7. Metadata
 
@@ -178,6 +194,7 @@ Caw protects content, not metadata.
 - Pairing codes contain the account's numeric id.
 - The callee's server learns call times and participants. Relay servers see the IP addresses of relayed calls.
 - Push services see when notifications are delivered; notifications carry no content.
+- Group members see each other's names, servers and account ids. Each member's server sees when group messages arrive for its users and the IP address of every member that posts to it. The sender's server stores its attachments and sees which members download them.
 
 ## 8. Limitations
 
@@ -189,6 +206,11 @@ Caw protects content, not metadata.
 - **Verification words protect pairing only,** and only when users compare them. A code shared over another channel relies on that channel until then.
 - **Link tokens appear in WebSocket URLs** and can be recorded by proxies that log request URLs.
 - **Password rules are enforced by clients,** because the server receives derived keys.
+- **Group members are trusted to introduce others.** A member can add someone the other members have not paired with; clients show who added whom and which members are contacts.
+- **Group state converges without a single order.** Concurrent changes merge, and members whose views differ exchange them when a message's digest does not match.
+- **Group size limits are enforced by clients,** since servers do not see group membership.
+- **A member's attachments are stored on its own server** and are no longer available once it leaves the group.
+- **Older clients** show a group invitation as a message and drop groups from the vault; a client with group support restores them.
 
 ## 9. Comparison
 

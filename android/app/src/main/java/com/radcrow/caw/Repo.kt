@@ -10,6 +10,7 @@ import androidx.core.content.edit
 import com.radcrow.caw.call.Notifications
 import com.radcrow.caw.media.Prepared
 import com.radcrow.caw.media.TooLarge
+import com.radcrow.caw.sealed.CONTROLS
 import com.radcrow.caw.sealed.Card
 import com.radcrow.caw.sealed.Crypto
 import com.radcrow.caw.sealed.Keys
@@ -21,6 +22,8 @@ import com.radcrow.caw.sealed.Plain
 import com.radcrow.caw.sealed.PublicDevice
 import com.radcrow.caw.sealed.Secret
 import com.radcrow.caw.sealed.Vault
+import com.radcrow.caw.sealed.plainOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,25 +36,59 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.IOException
+import java.text.Collator
 import java.util.UUID
 
-// message as needed by the views; sent and received share one shape
-data class RawMessage(val id: String, val fromUser: Long, val toUser: Long, val createdAt: Long, val expiresAt: Long)
+data class RawMessage(val id: String, val fromUser: Long, val toUser: Long, val createdAt: Long, val expiresAt: Long, val sender: String? = null)
 
 // pending: in the outbox, not yet on the server
 data class Message(val raw: RawMessage, val plain: Plain?, val pending: Boolean = false)
 
+// group entries: one copy per member, each with its own id; held copies wait for the member's card to change
 @Serializable
-data class Outgoing(val id: String, val to: Long, val plain: Plain, val blobs: List<String>, val at: Long, val ttl: Long)
+data class Outgoing(
+    val id: String,
+    val to: Long,
+    val plain: Plain,
+    val blobs: List<String>,
+    val at: Long,
+    val ttl: Long,
+    val group: String? = null,
+    val copies: Map<String, String>? = null,
+    val cards: Map<String, GroupCard>? = null,
+    val held: Map<String, String>? = null,
+    val body: JsonObject? = null,
+)
 
-data class CawEvent(val at: Long, val text: String)
+// at: seconds with a fraction, so an event sorts after messages that arrived earlier in the same second
+data class CawEvent(val at: Double, val text: String)
 
 data class Attachment(val status: String, val progress: Float, val prepared: Prepared? = null)
 
 // pairing request from someone who redeemed this account's code
 data class Prompt(val linkId: String, val card: Card, val words: List<String>)
+
+data class GroupPrompt(val contact: String, val from: String, val g: String, val name: String, val members: List<String>, val inviter: String, val member: String)
+
+// only g syncs through the vault
+@Serializable
+data class LocalGroup(
+    val g: Group,
+    val num: Long,
+    val u: Long,
+    val names: Map<String, String> = emptyMap(),
+    val signers: Map<String, Map<String, String>> = emptyMap(),
+)
+
+data class GroupMember(val id: String, val name: String, val host: String, val contact: Boolean, val me: Boolean)
 
 @Serializable
 data class NewDevice(val id: String, val label: String)
@@ -61,7 +98,35 @@ data class NewDevice(val id: String, val label: String)
 data class KnownDevice(val keys: List<String>, val sign: String, val label: String, val seen: Long)
 
 @Serializable
-private data class Stored(val contacts: List<Contact>, val gone: Map<String, Long> = emptyMap())
+private data class Stored(
+    val contacts: List<Contact>,
+    val gone: Map<String, Long> = emptyMap(),
+    val groups: List<LocalGroup> = emptyList(),
+    val goneGroups: Map<String, Long> = emptyMap(),
+)
+
+private data class MemberLink(override val server: String, override val out: LinkCred) : Remote
+
+private fun remoteOf(c: GroupCard): Remote = MemberLink(c.server, LinkCred(c.linkId, c.token))
+
+// never accepted through a contact link
+private fun isGroupContent(p: JsonObject): Boolean {
+    val t = p.string("t")
+    return t == "group" || ((t == "text" || t == "media") && p.containsKey("g"))
+}
+
+// javascript's `sv && sv !== digest`
+private fun differs(sv: JsonElement?, digest: String): Boolean = when (sv) {
+    null, is JsonNull -> false
+    is JsonPrimitive -> if (sv.isString) sv.content.isNotEmpty() && sv.content != digest else sv.content == "true" || sv.content.toDoubleOrNull()?.let { it != 0.0 } == true
+    else -> true
+}
+
+private class Opened(val raw: JsonObject, val sender: String) {
+    val plain by lazy { plainOf(raw) }
+}
+
+private fun clip(s: String, n: Int): String = if (s.codePointCount(0, s.length) <= n) s else s.substring(0, s.offsetByCodePoints(0, n))
 
 fun plainText(p: Plain): String {
     if (p.t != "media") return p.text.orEmpty()
@@ -72,6 +137,7 @@ fun plainText(p: Plain): String {
 class Repo(private val app: CawApp) {
     val me = MutableStateFlow(app.prefs.me)
     val contacts = MutableStateFlow<List<Contact>>(emptyList())
+    val groups = MutableStateFlow<List<LocalGroup>>(emptyList())
     val messages = MutableStateFlow<Map<Long, List<Message>>>(emptyMap())
     val events = MutableStateFlow<Map<Long, List<CawEvent>>>(emptyMap())
     val seen = MutableStateFlow<Map<Long, Long>>(emptyMap())
@@ -81,6 +147,7 @@ class Repo(private val app: CawApp) {
     val aliases = MutableStateFlow<Map<Long, String>>(emptyMap())
     val composeFor = MutableStateFlow<Long?>(null)
     val prompts = MutableStateFlow<List<Prompt>>(emptyList())
+    val groupPrompts = MutableStateFlow<List<GroupPrompt>>(emptyList())
     // contact whose server did not respond; the user chooses retry or remove
     val unreachable = MutableStateFlow<Long?>(null)
     val config = MutableStateFlow(ServerConfig())
@@ -103,6 +170,7 @@ class Repo(private val app: CawApp) {
 
     @Volatile var openChat: Long? = null
     @Volatile private var skew = 0L
+    // a full reload and live mail never overlap
     private val loadLock = Mutex()
     private val flushLock = Mutex()
     private val setupLock = Mutex()
@@ -117,10 +185,18 @@ class Repo(private val app: CawApp) {
     private val knownSerializer = MapSerializer(String.serializer(), KnownDevice.serializer())
     private val newSerializer = ListSerializer(NewDevice.serializer())
     private val peers = HashMap<String, Pair<Long, List<PublicDevice>>>()
+    private val memberLists = HashMap<String, Pair<Long, List<PublicDevice>>>()
+    private val synced = HashMap<String, Long>()
+    // entries a send is still posting; flush skips them
+    private val posting = HashSet<String>()
     // per server: next retry time and backoff step
     private val retry = HashMap<String, Pair<Long, Int>>()
     private val main = Handler(Looper.getMainLooper())
     private var gone: Map<String, Long> = emptyMap()
+    private var goneGroups: Map<String, Long> = emptyMap()
+    // the account's group links, known before the vault names their groups
+    @Volatile private var groupLinks: Set<String> = emptySet()
+    @Volatile private var vaultExtra: Map<String, JsonElement> = emptyMap()
     private var known: Map<String, KnownDevice> = emptyMap()
     @Volatile private var dataKey: ByteArray? = null
     // key before rotation, for merging a copy written concurrently by another device
@@ -153,9 +229,9 @@ class Repo(private val app: CawApp) {
 
     fun contact(num: Long) = contacts.value.find { it.num == num }
 
-    fun name(id: Long) = contact(id)?.let { it.s.alias ?: it.name } ?: "Someone"
+    fun name(id: Long) = group(id)?.let { it.g.name.v.ifEmpty { "Group" } } ?: contact(id)?.let { it.s.alias ?: it.name } ?: "Someone"
 
-    fun timerFor(id: Long) = contact(id)?.ttl ?: config.value.messageTtlDefault
+    fun timerFor(id: Long) = group(id)?.g?.ttl?.v ?: contact(id)?.ttl ?: config.value.messageTtlDefault
 
     private fun toast(text: String) = main.post { Toast.makeText(app, text, Toast.LENGTH_LONG).show() }
 
@@ -167,7 +243,7 @@ class Repo(private val app: CawApp) {
 
     private fun saveContacts() {
         val uid = me.value?.id ?: return
-        val v = Stored(contacts.value, gone)
+        val v = Stored(contacts.value, gone, groups.value, goneGroups)
         contactSp.edit { putString("c.$uid", Crypto.b64(Vault.seal(json.encodeToString(Stored.serializer(), v).toByteArray()))) }
     }
 
@@ -177,7 +253,8 @@ class Repo(private val app: CawApp) {
         saveContacts()
     }
 
-    private fun nextNum() = maxOf(1_000_000L, contacts.value.maxOfOrNull { it.num } ?: 0L) + 1
+    private fun nextNum(list: List<Contact> = contacts.value) =
+        maxOf(1_000_000L, list.maxOfOrNull { it.num } ?: 0L, groups.value.maxOfOrNull { it.num } ?: 0L) + 1
 
     // change synced to every device of this account
     private fun touch(num: Long, at: Long = stamp(), f: (Synced) -> Synced) {
@@ -194,10 +271,11 @@ class Repo(private val app: CawApp) {
         val q = query.trim().lowercase()
         val n = messages.value
         val rank = { id: Long -> n[id]?.lastOrNull()?.raw?.createdAt ?: if (id in opened.value || id == openChat) Long.MAX_VALUE else -1L }
-        return contacts.value
+        val people = contacts.value
             .filter { q.isEmpty() || name(it.num).lowercase().contains(q) || it.name.lowercase().contains(q) || hostOf(it.server).contains(q) }
             .map { it.num }
-            .sortedWith(compareByDescending<Long> { rank(it) }.thenBy { name(it).lowercase() })
+        val teams = groups.value.filter { q.isEmpty() || it.g.name.v.lowercase().contains(q) }.map { it.num }
+        return (people + teams).sortedWith(compareByDescending<Long> { rank(it) }.thenBy { name(it).lowercase() })
     }
 
     fun unread(id: Long): Int {
@@ -206,6 +284,13 @@ class Repo(private val app: CawApp) {
     }
 
     fun preview(id: Long): Pair<String, Boolean> {
+        val g = group(id)
+        if (g != null) {
+            if (g.g.inviter != null) return "Waiting to be added" to false
+            val n = messages.value[id]?.lastOrNull() ?: return memberCount(id) to false
+            val p = n.plain ?: return "Encrypted message" to false
+            return "${if (n.raw.fromUser == me.value?.id) "You" else memberName(id, n.raw.sender)}: ${plainText(p)}" to false
+        }
         val c = contact(id)
         if (c?.status == "pending") return "Waiting to accept" to false
         val n = messages.value[id]?.lastOrNull() ?: return hostOf(c?.server.orEmpty()) to false
@@ -327,10 +412,12 @@ class Repo(private val app: CawApp) {
         val v = stored?.let { runCatching { json.decodeFromString(Stored.serializer(), String(Vault.open(Crypto.unb64(it)))) }.getOrNull() }
         contacts.value = v?.contacts.orEmpty()
         gone = v?.gone.orEmpty()
+        groups.value = v?.groups.orEmpty()
+        goneGroups = v?.goneGroups.orEmpty()
         publish()
     }
 
-    // --- the vault: contacts shared by all of this account's devices
+    // --- the vault: contacts and groups shared by all of this account's devices
 
     private fun loadDataKey(uid: Long): ByteArray? =
         keySp.getString("k.$uid", null)?.let { runCatching { Vault.open(Crypto.unb64(it)) }.getOrNull() }
@@ -347,12 +434,12 @@ class Repo(private val app: CawApp) {
     private fun openVault(key: ByteArray, blob: String): VaultDoc? = runCatching {
         val b = Crypto.unb64(blob)
         val pt = Crypto.aesGcm(false, key, b.copyOfRange(0, 12), VAULT_AAD, b.copyOfRange(12, b.size))
-        json.decodeFromString(VaultDoc.serializer(), String(pt)).takeIf { it.v == 1 }
+        VaultDoc.decode(String(pt))
     }.getOrNull()
 
     private fun sealVault(key: ByteArray, doc: VaultDoc): String {
         val iv = Crypto.random(12)
-        return Crypto.b64(Crypto.concat(iv, Crypto.aesGcm(true, key, iv, VAULT_AAD, json.encodeToString(VaultDoc.serializer(), doc).toByteArray())))
+        return Crypto.b64(Crypto.concat(iv, Crypto.aesGcm(true, key, iv, VAULT_AAD, doc.encode().toByteArray())))
     }
 
     private fun openAny(blob: String): VaultDoc? = listOfNotNull(dataKey, prevKey).firstNotNullOfOrNull { openVault(it, blob) }
@@ -399,7 +486,10 @@ class Repo(private val app: CawApp) {
         val m = LinkedHashMap<String, VaultEntry>()
         for ((id, u) in gone) if (u > cutoff) m[id] = VaultEntry(u, gone = true)
         for (c in contacts.value) m[c.id] = VaultEntry(c.s.updatedAt, c = c.s)
-        return VaultDoc(1, m)
+        val g = LinkedHashMap<String, GroupEntry>()
+        for ((id, u) in goneGroups) if (u > cutoff) g[id] = GroupEntry(u, gone = true)
+        for (x in groups.value) g[x.g.id] = GroupEntry(x.u, g = x.g)
+        return VaultDoc(m, g, vaultExtra)
     }
 
     // newer entry wins; returns true when local state has entries the copy lacks
@@ -424,7 +514,7 @@ class Repo(private val app: CawApp) {
             if (local != null) {
                 list = list.map { if (it.id == id) it.copy(s = c) else it }
             } else {
-                list = list + Contact(c, maxOf(1_000_000L, list.maxOfOrNull { it.num } ?: 0L) + 1)
+                list = list + Contact(c, nextNum(list))
                 prompts.update { p -> p.filter { it.linkId != c.inLink } }
             }
         }
@@ -432,15 +522,48 @@ class Repo(private val app: CawApp) {
             gone = g
             setContacts(list)
         }
-        val ours = doc().contacts
-        return ours.any { (id, e) -> (doc.contacts[id]?.u ?: -1L) < e.u }
+        vaultExtra = doc.extra
+        var groupsChanged = false
+        var added = false
+        for ((id, e) in doc.groups) {
+            val local = groupById(id)
+            val eg = e.g
+            if (e.gone == true || eg == null) {
+                if (e.u <= (goneGroups[id] ?: -1L)) continue
+                goneGroups = goneGroups + (id to e.u)
+                if (local != null && e.u > local.u) dropGroup(local)
+                groupsChanged = true
+                continue
+            }
+            if ((goneGroups[id] ?: -1L) >= e.u) continue
+            if (local == null) {
+                goneGroups = goneGroups - id
+                val num = nextNum()
+                groups.update { it + LocalGroup(eg, num, e.u) }
+                groupPrompts.update { p -> p.filter { it.g != id } }
+                groupsChanged = true
+                added = true
+                continue
+            }
+            val merged = mergeGroup(local.g, eg, stamp())
+            if (e.u > local.u) editGroup(id) { it.copy(u = e.u) }
+            if (merged == local.g) continue
+            val old = local.g.own.linkId
+            editGroup(id) { it.copy(g = merged) }
+            if (old != merged.own.linkId) app.scope.launch { runCatching { app.api.revokeLink(old) } }
+            groupsChanged = true
+        }
+        if (groupsChanged) saveContacts()
+        if (added) app.scope.launch { runCatching { loadMessages() } }
+        val ours = doc()
+        return ours.contacts.any { (id, e) -> (doc.contacts[id]?.u ?: -1L) < e.u } || ours.groups.any { (id, e) -> doc.groups[id] != e }
     }
 
     private suspend fun pullVault() {
         if (dataKey == null) return
         vaultLock.withLock {
             val r = app.api.vault()
-            val doc = r.blob?.let { openAny(it) } ?: if (r.blob == null) VaultDoc(1, emptyMap()) else null
+            val doc = r.blob?.let { openAny(it) } ?: if (r.blob == null) VaultDoc() else null
             if (doc == null) return keyReplaced()
             vaultVersion = r.version
             if (merge(doc)) schedulePush()
@@ -471,7 +594,7 @@ class Repo(private val app: CawApp) {
         repeat(5) {
             val key = dataKey ?: return@withLock
             val r = app.api.vault()
-            val doc = r.blob?.let { openAny(it) } ?: if (r.blob == null) VaultDoc(1, emptyMap()) else null
+            val doc = r.blob?.let { openAny(it) } ?: if (r.blob == null) VaultDoc() else null
             if (doc == null && !force) return@withLock keyReplaced()
             vaultVersion = r.version
             if (doc != null && !merge(doc) && !force) return@withLock
@@ -487,8 +610,11 @@ class Repo(private val app: CawApp) {
 
     // drops links removed by the peer or another device of this account while offline
     private suspend fun reconcile() {
-        val have = app.api.myLinks().map { it.id }.toSet()
+        val links = app.api.myLinks()
+        val have = links.map { it.id }.toSet()
+        groupLinks = links.filter { it.kind == "group" }.map { it.id }.toSet()
         for (c in contacts.value.toList()) if (c.inLink !in have) forget(c, "${name(c.num)} is no longer a contact.")
+        for (g in groups.value.toList()) if (g.g.own.linkId !in have) forgetGroup(g.g.id, "You are no longer in ${g.g.name.v}.")
     }
 
     private fun clearChat(num: Long) {
@@ -591,22 +717,22 @@ class Repo(private val app: CawApp) {
         secureNow.value = true
     }
 
-    private suspend fun ownSealTo(): List<PublicDevice> {
-        if (System.currentTimeMillis() - ownAt > 60_000) refreshDevices()
+    private suspend fun ownSealTo(fresh: Boolean = false): List<PublicDevice> {
+        if (fresh || System.currentTimeMillis() - ownAt > 60_000) refreshDevices()
         return ownDevices.value.map { it.public() }.filter { app.sealed.certOk(it) }
     }
 
     private fun ownSigners(): Map<String, String> = known.mapValues { it.value.sign }
 
     // every stanza for this account must target a device the server lists (or listed recently), with a known key
-    private suspend fun checkDevices(c: Contact, m: Mail, ours: String) {
+    private suspend fun checkDevices(num: Long, m: Mail, ours: String) {
         if (m.createdAt < enrolledAt) return
         fun odd() = m.keys.filter { it.o == ours && known[it.d]?.keys?.contains(it.k) != true }
         if (odd().isEmpty()) return
         runCatching { refreshDevices() }
-        if (odd().isEmpty() || c.num in deviceAlerts.value) return
-        deviceAlerts.update { it + c.num }
-        Notifications.security(app, "Check your devices", "A message with ${name(c.num)} was also encrypted for a device that isn't yours.")
+        if (odd().isEmpty() || num in deviceAlerts.value) return
+        deviceAlerts.update { it + num }
+        Notifications.security(app, "Check your devices", "A message ${if (isGroup(num)) "in" else "with"} ${name(num)} was also encrypted for a device that isn't yours.")
     }
 
     fun dismissAlert(num: Long) = deviceAlerts.update { it - num }
@@ -654,7 +780,7 @@ class Repo(private val app: CawApp) {
         val c = Contact(s, nextNum())
         val card = Card(own, account, user.displayName, mine.linkId, mine.token)
         try {
-            postControl(c, Plain("hello", card = card))
+            postControl(c, Plain("hello", card = card).toJson())
         } catch (e: IOException) {
             runCatching { app.api.revokeLink(mine.linkId) }
             app.scope.launch { runCatching { app.api.linkDrop(c) } }
@@ -694,13 +820,13 @@ class Repo(private val app: CawApp) {
         setContacts(contacts.value + c)
         schedulePush()
         addEvent(c.num, "Contact added.")
-        app.scope.launch { runCatching { postControl(c, Plain("accept")) }.onFailure { sendFailed(c, it) } }
+        app.scope.launch { runCatching { postControl(c, Plain("accept").toJson()) }.onFailure { sendFailed(c, it) } }
         return c.num
     }
 
     suspend fun declinePrompt(p: Prompt) {
         prompts.update { l -> l.filter { it.linkId != p.linkId } }
-        runCatching { postControl(remote(p.card), Plain("decline")) }
+        runCatching { postControl(remote(p.card), Plain("decline").toJson()) }
         runCatching { app.api.revokeLink(p.linkId) }
     }
 
@@ -713,9 +839,9 @@ class Repo(private val app: CawApp) {
         return contact(c.num)?.signers.orEmpty()
     }
 
-    private suspend fun openFrom(c: Contact, m: Mail): Plain? {
+    private suspend fun openFrom(c: Contact, m: Mail): JsonObject? {
         val plain = app.sealed.openMail(m, signersFor(c, m.fromDevice))
-        if (plain != null) checkDevices(c, m, "to")
+        if (plain != null) checkDevices(c.num, m, "to")
         return plain
     }
 
@@ -725,18 +851,27 @@ class Repo(private val app: CawApp) {
         val res = app.api.myMail()
         skew = res.now - System.currentTimeMillis() / 1000
         val grouped = HashMap<Long, MutableList<Message>>()
+        val byGroup = LinkedHashMap<String, MutableList<Mail>>()
         for (m in res.mail) {
             val c = contacts.value.find { it.inLink == m.linkId }
             if (c == null) {
-                maybeHello(m)
+                val g = groups.value.find { it.g.own.linkId == m.linkId }
+                if (g != null) byGroup.getOrPut(g.g.id) { mutableListOf() } += m
+                else if (m.linkId !in groupLinks) maybeHello(m)
                 continue
             }
-            val plain = openFrom(c, m)
-            if (plain?.control == true) {
-                control(c, plain, m, false)
+            val raw = openFrom(c, m)
+            if (raw != null && isGroupContent(raw)) continue
+            if (raw != null && raw.string("t") in CONTROLS) {
+                control(c, raw, m, false)
                 continue
             }
-            grouped.getOrPut(c.num) { mutableListOf() } += Message(RawMessage(m.id, c.num, uid, m.createdAt, m.expiresAt), plain)
+            grouped.getOrPut(c.num) { mutableListOf() } += Message(RawMessage(m.id, c.num, uid, m.createdAt, m.expiresAt), raw?.let(::plainOf))
+        }
+        for ((gid, list) in byGroup) {
+            val num = groupById(gid)?.num ?: continue
+            val shown = readGroup(gid, list)
+            if (shown.isNotEmpty()) grouped.getOrPut(num) { mutableListOf() } += shown
         }
         // sent copies live on the contacts' servers; any device of this account may have sent them
         for (c in contacts.value.filter { it.status == "active" }) {
@@ -767,10 +902,10 @@ class Repo(private val app: CawApp) {
         val out = mutableListOf<Message>()
         for (m in app.api.linkMail(c).mail) {
             if (m.fromDevice !in known) runCatching { refreshDevices() }
-            val plain = app.sealed.openMail(m, ownSigners())
-            if (plain != null) checkDevices(c, m, "from")
-            if (plain?.control == true) continue
-            out += Message(RawMessage(m.id, uid, c.num, m.createdAt, m.expiresAt), plain)
+            val raw = app.sealed.openMail(m, ownSigners())
+            if (raw != null) checkDevices(c.num, m, "from")
+            if (raw != null && raw.string("t") in CONTROLS) continue
+            out += Message(RawMessage(m.id, uid, c.num, m.createdAt, m.expiresAt), raw?.let(::plainOf))
         }
         return out
     }
@@ -792,12 +927,24 @@ class Repo(private val app: CawApp) {
 
     private suspend fun takeMail(m: Mail) {
         ensureSetup()
+        loadLock.withLock { readOne(m) }
+    }
+
+    private suspend fun readOne(m: Mail) {
+        app.sealed.device ?: return
         val uid = me.value?.id ?: return
-        val c = contacts.value.find { it.inLink == m.linkId } ?: return maybeHello(m)
+        val c = contacts.value.find { it.inLink == m.linkId }
+        if (c == null) {
+            val g = groups.value.find { it.g.own.linkId == m.linkId }
+            if (g != null) return takeGroupMail(g.g.id, m)
+            if (m.linkId in groupLinks) return
+            return maybeHello(m)
+        }
         if (messages.value[c.num]?.any { it.raw.id == m.id } == true) return
-        val plain = openFrom(c, m)
-        if (plain?.control == true) return control(c, plain, m, true)
-        val msg = Message(RawMessage(m.id, c.num, uid, m.createdAt, m.expiresAt), plain)
+        val raw = openFrom(c, m)
+        if (raw != null && isGroupContent(raw)) return
+        if (raw != null && raw.string("t") in CONTROLS) return control(c, raw, m, true)
+        val msg = Message(RawMessage(m.id, c.num, uid, m.createdAt, m.expiresAt), raw?.let(::plainOf))
         messages.update { n -> n + (c.num to (n[c.num].orEmpty() + msg).sortedBy { it.raw.createdAt }) }
         if (openChat == c.num && app.visible) {
             markSeen(c.num)
@@ -808,10 +955,10 @@ class Repo(private val app: CawApp) {
     }
 
     // seen by every device of this account; stamping from the message keeps their vault writes identical
-    private fun control(c: Contact, p: Plain, m: Mail, live: Boolean) {
+    private fun control(c: Contact, raw: JsonObject, m: Mail, live: Boolean) {
         val who = name(c.num)
         val at = m.createdAt * 1000
-        when (p.t) {
+        when (raw.string("t")) {
             "accept" -> if (c.status == "pending") {
                 touch(c.num, at) { it.copy(status = "active") }
                 addEvent(c.num, "Contact added.")
@@ -826,11 +973,14 @@ class Repo(private val app: CawApp) {
                 forget(c, "$who is no longer a contact.")
             }
             "timer" -> {
-                val ttl = p.ttl ?: return
+                val ttl = plainOf(raw)?.ttl ?: return
                 if (c.ttl == ttl) return
                 touch(c.num, at) { it.copy(ttl = ttl) }
                 addEvent(c.num, "$who set messages to expire after ${fmtTtl(ttl)}")
             }
+            "group_invite" -> groupInvite(c, raw, m)
+            "group_join" -> groupJoin(c, raw, m)
+            "group_decline" -> groupDecline(c, raw)
         }
     }
 
@@ -838,6 +988,7 @@ class Repo(private val app: CawApp) {
         val text = when {
             n.plain == null -> "New message"
             n.plain.t == "call" -> callText(n)
+            isGroup(other) -> "${memberName(other, n.raw.sender)}: ${plainText(n.plain)}"
             else -> plainText(n.plain)
         }
         Notifications.message(app, other, name(other), text)
@@ -883,7 +1034,7 @@ class Repo(private val app: CawApp) {
     }
 
     private fun addEvent(id: Long, text: String) {
-        events.update { it + (id to (it[id].orEmpty() + CawEvent(serverNow(), text))) }
+        events.update { it + (id to (it[id].orEmpty() + CawEvent(stamp() / 1000.0, text))) }
     }
 
     // contact's devices as reported by their server; only those whose identity key signed their encryption key
@@ -902,7 +1053,7 @@ class Repo(private val app: CawApp) {
     }
 
     // their server rejects (412) a message missing one of their devices; refetches the list and retries once
-    private suspend fun deliver(c: Contact, ttl: Long, plain: Plain, id: String = UUID.randomUUID().toString(), blobs: List<String> = emptyList()): Mail? {
+    private suspend fun deliver(c: Contact, ttl: Long, plain: JsonObject, id: String = UUID.randomUUID().toString(), blobs: List<String> = emptyList()): Mail? {
         var i = 0
         while (true) {
             val to = peerDevices(c, fresh = i > 0)
@@ -918,12 +1069,14 @@ class Repo(private val app: CawApp) {
         }
     }
 
-    private suspend fun postControl(c: Contact, plain: Plain) {
-        deliver(c, config.value.messageTtlDefault, plain)
+    private suspend fun postControl(c: Contact, plain: JsonObject, ttl: Long = config.value.messageTtlDefault) {
+        deliver(c, ttl, plain)
     }
 
     // network errors queue the message in the outbox; a gone contact is removed; other errors are thrown
     suspend fun send(to: Long, plain: Plain, blobs: List<String> = emptyList()) {
+        app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
+        group(to)?.let { return sendGroup(it, plain, blobs) }
         val c = contact(to)?.takeIf { it.status == "active" } ?: throw IOException("This contact is not available.")
         val o = Outgoing(UUID.randomUUID().toString(), to, plain, blobs, serverNow(), timerFor(to))
         try {
@@ -947,19 +1100,18 @@ class Repo(private val app: CawApp) {
     // stable id across retries; a send that already landed returns a conflict instead of a duplicate
     private suspend fun post(o: Outgoing) {
         val c = contact(o.to) ?: return
-        val stored = deliver(c, o.ttl, o.plain, o.id, o.blobs)
+        val stored = deliver(c, o.ttl, o.plain.toJson(), o.id, o.blobs)
         if (stored != null) {
-            addMine(c, stored.id, stored.createdAt, stored.expiresAt, o.plain)
+            addMine(c.num, stored.id, stored.createdAt, stored.expiresAt, o.plain)
             app.scope.launch { runCatching { app.api.sent(c.id) } }
         }
         reachable(c)
     }
 
-    private fun addMine(c: Contact, id: String, created: Long, expires: Long, plain: Plain) {
+    private fun addMine(num: Long, id: String, created: Long, expires: Long, plain: Plain) {
         val uid = me.value?.id ?: return
-        if (messages.value[c.num]?.any { it.raw.id == id } == true) return
-        val msg = Message(RawMessage(id, uid, c.num, created, expires), plain)
-        messages.update { n -> n + (c.num to (n[c.num].orEmpty() + msg).sortedBy { it.raw.createdAt }) }
+        val msg = Message(RawMessage(id, uid, num, created, expires), plain)
+        messages.update { n -> if (n[num]?.any { it.raw.id == id } == true) n else n + (num to (n[num].orEmpty() + msg).sortedBy { it.raw.createdAt }) }
     }
 
     private fun reachable(c: Contact) {
@@ -983,12 +1135,23 @@ class Repo(private val app: CawApp) {
         if (ask) unreachable.value = c.num
     }
 
+    // a member's server: retried after its own delay, without the remove-contact prompt
+    private fun later(server: String, retryAfter: Long = 0) = synchronized(retry) {
+        val r = retry[server]
+        val step = if (retryAfter > 0) r?.second ?: 0 else if (r != null) r.second + 1 else 0
+        val wait = (if (retryAfter > 0) retryAfter else BACKOFF[minOf(step, BACKOFF.size - 1)]) * (1 + Math.random() * 0.2)
+        retry[server] = (System.currentTimeMillis() + (wait * 1000).toLong()) to step
+    }
+
+    private fun due(server: String) = synchronized(retry) { retry[server]?.first ?: 0L }
+
     fun keepTrying() {
         unreachable.value = null
     }
 
-    private fun setOutbox(list: List<Outgoing>) {
+    private fun setOutbox(list: List<Outgoing>, save: Boolean = true) {
         outbox.value = list
+        if (!save) return
         val uid = me.value?.id ?: return
         outSp.edit {
             if (list.isEmpty()) remove("o.$uid")
@@ -996,11 +1159,15 @@ class Repo(private val app: CawApp) {
         }
     }
 
+    private fun editOutbox(id: String, f: (Outgoing) -> Outgoing) {
+        setOutbox(outbox.value.map { if (it.id == id) f(it) else it }, save = false)
+    }
+
     private fun loadOutbox(uid: Long) {
         val stored = outSp.getString("o.$uid", null) ?: return
         val list = runCatching { json.decodeFromString(outSerializer, String(Vault.open(Crypto.unb64(stored)))) }.getOrDefault(emptyList())
         val have = outbox.value.map { it.id }.toSet()
-        outbox.value = outbox.value + list.filter { it.id !in have && contact(it.to) != null }
+        outbox.value = outbox.value + list.filter { it.id !in have && (it.copies != null || contact(it.to) != null) }
         dropStale()
     }
 
@@ -1022,7 +1189,8 @@ class Repo(private val app: CawApp) {
         val stale = outbox.value.filter { it.at + it.ttl <= t }
         if (stale.isEmpty()) return
         setOutbox(outbox.value.filter { it.at + it.ttl > t })
-        toast(if (stale.size == 1) "An unsent message expired." else "${stale.size} unsent messages expired.")
+        val shown = stale.count { it.plain.t != "group" }
+        if (shown > 0) toast(if (shown == 1) "An unsent message expired." else "$shown unsent messages expired.")
     }
 
     // one server at a time, in order, only after its backoff elapses
@@ -1030,6 +1198,21 @@ class Repo(private val app: CawApp) {
         if (app.sealed.device == null) return@withLock
         val skip = HashSet<String>()
         for (o in outbox.value.toList()) {
+            if (o.copies != null) {
+                if (synchronized(posting) { !posting.add(o.id) }) continue
+                val done = try {
+                    postGroup(o.id, skip)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    toast("Message not sent: ${e.message}")
+                    true
+                } finally {
+                    synchronized(posting) { posting -= o.id }
+                }
+                setOutbox(if (done) outbox.value.filter { it.id != o.id } else outbox.value)
+                continue
+            }
             val c = contact(o.to)
             if (c == null) {
                 setOutbox(outbox.value.filter { it.id != o.id })
@@ -1058,7 +1241,7 @@ class Repo(private val app: CawApp) {
     fun pendingFor(id: Long, sent: List<Message>): List<Message> {
         val uid = me.value?.id ?: return emptyList()
         val ids = sent.map { it.raw.id }.toSet()
-        return outbox.value.filter { it.to == id && it.id !in ids }.map {
+        return outbox.value.filter { it.to == id && it.id !in ids && it.plain.t != "group" }.map {
             Message(RawMessage(it.id, uid, it.to, it.at, it.at), it.plain, pending = true)
         }
     }
@@ -1094,24 +1277,28 @@ class Repo(private val app: CawApp) {
     suspend fun sendMedia(to: Long, text: String) {
         val a = attachments.value[to] ?: return
         val p = a.prepared ?: return
-        val c = contact(to) ?: return
-        if (a.status != "ready") return
+        val g = group(to)
+        val c = contact(to)
+        if ((c == null && g == null) || a.status != "ready") return
         setAttachment(to, a.copy(status = "sending", progress = 0f))
         try {
             val (body, key) = withContext(Dispatchers.IO) { app.media.encrypt(p.file.readBytes()) }
-            val blob = app.api.linkUpload(c, body) { setAttachment(to, a.copy(status = "sending", progress = it)) }
+            val progress = { x: Float -> setAttachment(to, a.copy(status = "sending", progress = x)) }
+            val blob = if (g != null) app.api.ownUpload(g.g.own.linkId, body, progress) else app.api.linkUpload(c!!, body, progress)
             val plain = Plain(
                 "media", text = text.ifBlank { null }, kind = p.kind, mime = p.mime, blob = blob, key = key,
                 size = p.size, w = p.w, h = p.h, dur = p.dur, thumb = p.thumb,
             )
             send(to, plain, listOf(blob))
-            app.media.keep(blob, p)
+            app.media.keep(blob, key, p, if (g != null) null else c)
             setAttachment(to, null)
         } catch (e: Gone) {
             setAttachment(to, a)
+            if (c == null) throw e
             forget(c, "${name(to)} is no longer reachable and was removed from your contacts.")
         } catch (e: Unreachable) {
             setAttachment(to, a)
+            if (c == null) throw IOException("Can't reach your server right now.")
             unreachableServer(c, e.retryAfter)
             throw IOException("Can't reach ${name(to)}'s server right now.")
         } catch (e: Exception) {
@@ -1121,10 +1308,652 @@ class Repo(private val app: CawApp) {
     }
 
     suspend fun setTimer(to: Long, ttl: Long) {
+        val g = group(to)
+        if (g != null) {
+            editGroup(g.g.id) { it.copy(g = it.g.copy(ttl = Reg(ttl, maxOf(stamp(), it.g.ttl.u + 1)))) }
+            touchGroup(g.g.id)
+            addEvent(to, "You set messages to expire after ${fmtTtl(ttl)}")
+            return sendState(g.g.id)
+        }
         val c = contact(to) ?: return
         touch(to) { it.copy(ttl = ttl) }
         addEvent(to, "You set messages to expire after ${fmtTtl(ttl)}")
-        runCatching { postControl(c, Plain("timer", ttl = ttl)) }.onFailure { sendFailed(c, it) }
+        runCatching { postControl(c, Plain("timer", ttl = ttl).toJson()) }.onFailure { sendFailed(c, it) }
+    }
+
+    // --- groups; see docs/protocol.md, section 9
+
+    fun group(num: Long) = groups.value.find { it.num == num }
+
+    fun isGroup(num: Long) = groups.value.any { it.num == num }
+
+    private fun groupById(id: String) = groups.value.find { it.g.id == id }
+
+    private fun editGroup(id: String, f: (LocalGroup) -> LocalGroup) {
+        groups.update { list -> list.map { if (it.g.id == id) f(it) else it } }
+    }
+
+    private fun ownServer() = app.prefs.server.orEmpty().trimEnd('/')
+
+    private fun cardName(c: GroupCard): String =
+        contacts.value.find { it.server == c.server && it.s.account == c.account }?.let { it.s.alias ?: it.name } ?: c.name
+
+    fun memberName(num: Long, id: String?): String {
+        val g = group(num) ?: return ""
+        if (id == null) return ""
+        if (id == g.g.me) return "You"
+        val c = g.g.members[id]?.c
+        return if (c != null) cardName(c) else g.names[id] ?: "Former member"
+    }
+
+    fun groupRoom(num: Long?): Int {
+        val max = config.value.maxGroupMembers
+        val g = num?.let(::group) ?: return max - 1
+        val t = serverNow()
+        return max - liveCards(g.g.members).size - g.g.invites.values.count { it.expires > t }
+    }
+
+    fun memberCount(num: Long): String {
+        val n = group(num)?.let { liveCards(it.g.members).size } ?: 0
+        return "$n member${if (n == 1) "" else "s"}"
+    }
+
+    fun groupMembers(num: Long): List<GroupMember> {
+        val g = group(num) ?: return emptyList()
+        return liveCards(g.g.members).map { c ->
+            val self = c.id == g.g.me
+            GroupMember(c.id, if (self) "You" else cardName(c), hostOf(c.server), contacts.value.any { it.server == c.server && it.s.account == c.account }, self)
+        }.sortedWith(compareByDescending<GroupMember> { it.me }.thenBy(Collator.getInstance()) { it.name })
+    }
+
+    fun invitable(num: Long): List<Long> {
+        val g = group(num) ?: return emptyList()
+        val cards = liveCards(g.g.members)
+        val t = serverNow()
+        return contacts.value
+            .filter { c -> c.status == "active" && (g.g.invites[c.id]?.expires ?: 0L) <= t && cards.none { it.server == c.server && it.account == c.s.account } }
+            .map { it.num }
+    }
+
+    fun joined(num: Long) = group(num)?.let { it.g.inviter == null } ?: false
+
+    private fun ownCard(id: String, link: String, token: String, gen: Long): GroupCard {
+        val user = me.value ?: throw IOException("This device is not set up yet.")
+        return GroupCard(id, ownServer(), user.id.toString(), clip(user.displayName, 64).ifEmpty { user.username }, link, token, gen)
+    }
+
+    private suspend fun newGroupLink(): Triple<String, ByteArray, String> {
+        val secret = Crypto.random(32)
+        val token = Crypto.groupToken(secret, 0)
+        val r = try {
+            app.api.createGroupLink(0, token)
+        } catch (e: ApiException) {
+            if (e.code == 400) throw IOException("Your server doesn't support groups yet.")
+            throw e
+        }
+        groupLinks = groupLinks + r.linkId
+        return Triple(r.linkId, secret, token)
+    }
+
+    private fun checkSize(n: Int) {
+        val max = config.value.maxGroupMembers
+        if (n > max) throw IOException("Groups on this server can have up to $max members.")
+    }
+
+    suspend fun createGroup(name: String, nums: List<Long>): Long {
+        app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
+        val n = clip(name.trim(), 64)
+        if (n.isEmpty()) throw IOException("Enter a group name.")
+        checkSize(nums.size + 1)
+        val (link, secret, token) = newGroupLink()
+        val self = UUID.randomUUID().toString()
+        val t = stamp()
+        val g = LocalGroup(
+            Group(
+                id = UUID.randomUUID().toString(),
+                me = self,
+                name = Reg(n, t),
+                ttl = Reg(config.value.messageTtlDefault, t),
+                members = mapOf(self to Member(t, ownCard(self, link, token, 0))),
+                own = Own(link, Crypto.b64(secret), 0, 0),
+                invites = emptyMap(),
+                createdAt = serverNow(),
+            ),
+            nextNum(),
+            t,
+        )
+        groups.update { it + g }
+        touchGroup(g.g.id)
+        addEvent(g.num, "You created the group.")
+        invite(g.g.id, nums)
+        return g.num
+    }
+
+    fun inviteToGroup(num: Long, nums: List<Long>) {
+        val g = group(num) ?: return
+        invite(g.g.id, nums)
+    }
+
+    private fun invite(gid: String, nums: List<Long>) {
+        val g = groupById(gid) ?: return
+        val t = serverNow()
+        val pending = g.g.invites.values.count { it.expires > t }
+        checkSize(liveCards(g.g.members).size + pending + nums.size)
+        val open = invitable(g.num)
+        for (num in nums) {
+            val c = contact(num) ?: continue
+            if (num !in open) continue
+            val member = UUID.randomUUID().toString()
+            editGroup(gid) { it.copy(g = it.g.copy(invites = it.g.invites + (c.id to Invite(member, t + 7 * DAY)))) }
+            touchGroup(gid)
+            addEvent(g.num, "You invited ${name(num)}.")
+            val cur = groupById(gid) ?: return
+            val plain = buildJsonObject {
+                put("t", "group_invite")
+                put("g", gid)
+                put("name", cur.g.name.v)
+                put("members", JsonArray(liveCards(cur.g.members).map { JsonPrimitive(it.name) }))
+                put("inviter", cur.g.me)
+                put("member", member)
+                put("text", "${me.value?.displayName.orEmpty()} invited you to a group. Update Caw to join.")
+            }
+            app.scope.launch { runCatching { postControl(c, plain, config.value.messageTtlMax) }.onFailure { sendFailed(c, it) } }
+        }
+    }
+
+    suspend fun acceptGroup(p: GroupPrompt): Long {
+        val c = contacts.value.find { it.id == p.contact } ?: throw IOException("This contact is not available.")
+        checkSize(p.members.size + 1)
+        val (link, secret, token) = newGroupLink()
+        groupPrompts.update { l -> l.filter { it.g != p.g } }
+        val t = stamp()
+        val card = ownCard(p.member, link, token, 0)
+        val g = LocalGroup(
+            Group(
+                id = p.g,
+                me = p.member,
+                name = Reg(p.name, 0),
+                ttl = Reg(config.value.messageTtlDefault, 0),
+                members = mapOf(p.member to Member(t, card)),
+                own = Own(link, Crypto.b64(secret), 0, 0),
+                invites = emptyMap(),
+                inviter = Inviter(c.id, p.inviter),
+                createdAt = serverNow(),
+            ),
+            nextNum(),
+            t,
+        )
+        groups.update { it + g }
+        touchGroup(p.g)
+        addEvent(g.num, "Waiting for ${name(c.num)} to add you.")
+        val plain = buildJsonObject {
+            put("t", "group_join")
+            put("g", p.g)
+            put("card", json.encodeToJsonElement(GroupCard.serializer(), card))
+        }
+        app.scope.launch { runCatching { postControl(c, plain, config.value.messageTtlMax) }.onFailure { sendFailed(c, it) } }
+        return g.num
+    }
+
+    suspend fun declineGroup(p: GroupPrompt) {
+        groupPrompts.update { l -> l.filter { it.g != p.g } }
+        goneGroups = goneGroups + (p.g to stamp())
+        saveContacts()
+        schedulePush()
+        val c = contacts.value.find { it.id == p.contact } ?: return
+        runCatching { postControl(c, buildJsonObject { put("t", "group_decline"); put("g", p.g) }, config.value.messageTtlMax) }
+    }
+
+    suspend fun renameGroup(num: Long, name: String) {
+        val g = group(num) ?: return
+        val n = clip(name.trim(), 64)
+        if (n.isEmpty() || n == g.g.name.v) return
+        editGroup(g.g.id) { it.copy(g = it.g.copy(name = Reg(n, maxOf(stamp(), it.g.name.u + 1)))) }
+        touchGroup(g.g.id)
+        addEvent(num, "You renamed the group to $n.")
+        sendState(g.g.id)
+    }
+
+    suspend fun removeMember(num: Long, id: String) {
+        val g = group(num) ?: return
+        val e = g.g.members[id] ?: return
+        val removed = e.c ?: return
+        if (id == g.g.me) return
+        cacheNames(g.g.id)
+        val gone = Member(maxOf(stamp(), e.u + 1), gone = true)
+        val t = serverNow()
+        editGroup(g.g.id) { it.copy(g = it.g.copy(members = it.g.members + (id to gone), left = it.g.left.orEmpty() + (id to t))) }
+        touchGroup(g.g.id)
+        addEvent(num, "You removed ${cardName(removed)}.")
+        val cur = groupById(g.g.id) ?: return
+        val notice = buildJsonObject {
+            put("t", "group")
+            put("g", cur.g.id)
+            put("m", cur.g.me)
+            put("members", json.encodeToJsonElement(MEMBERS, mapOf(id to gone)))
+        }
+        queueGroup(cur, notice, listOf(removed), config.value.messageTtlMax)
+        if (!rotate(g.g.id)) sendState(g.g.id)
+    }
+
+    suspend fun leaveGroup(num: Long) {
+        val g = group(num) ?: return
+        val mine = g.g.members[g.g.me]
+        editGroup(g.g.id) { it.copy(g = it.g.copy(members = it.g.members + (it.g.me to Member(maxOf(stamp(), (mine?.u ?: 0L) + 1), gone = true)))) }
+        val cur = groupById(g.g.id) ?: return
+        runCatching { queueGroup(cur, stateOf(cur.g), liveCards(cur.g.members), config.value.messageTtlMax, keep = true) }
+        runCatching { app.api.revokeLink(cur.g.own.linkId) }
+        forgetGroup(g.g.id)
+    }
+
+    private fun stateOf(g: Group) = buildJsonObject {
+        put("t", "group")
+        put("g", g.id)
+        put("m", g.me)
+        put("name", json.encodeToJsonElement(NAME, g.name))
+        put("ttl", json.encodeToJsonElement(TTL, g.ttl))
+        put("members", json.encodeToJsonElement(MEMBERS, g.members))
+    }
+
+    private suspend fun sendState(gid: String, trigger: String? = null, to: List<GroupCard>? = null) {
+        val g = groupById(gid) ?: return
+        queueGroup(g, stateOf(g.g), to ?: liveCards(g.g.members).filter { it.id != g.g.me }, config.value.messageTtlMax, trigger)
+    }
+
+    private suspend fun sendGroup(g: LocalGroup, plain: Plain, blobs: List<String>) {
+        if (g.g.inviter != null) throw IOException("You can send messages once you are added to the group.")
+        val p = plain.copy(g = g.g.id, m = g.g.me, sv = Crypto.membershipDigest(digestList(g.g.members)))
+        val cards = liveCards(g.g.members).sortedByDescending { it.id == g.g.me }
+        queueGroup(g, null, cards, g.g.ttl.v, plain = p, blobs = blobs)
+    }
+
+    // cards travel with the entry when the group may be gone by delivery
+    private suspend fun queueGroup(
+        g: LocalGroup,
+        body: JsonObject?,
+        cards: List<GroupCard>,
+        ttl: Long,
+        trigger: String? = null,
+        keep: Boolean = false,
+        plain: Plain? = null,
+        blobs: List<String> = emptyList(),
+    ) {
+        val id = UUID.randomUUID().toString()
+        val secret = Crypto.unb64(g.g.own.secret)
+        val copies = LinkedHashMap<String, String>()
+        for (c in cards) {
+            copies[c.id] = when {
+                c.id == g.g.me -> id
+                trigger != null -> Crypto.groupMessageId(secret, trigger, c.id)
+                else -> UUID.randomUUID().toString()
+            }
+        }
+        val carried = cards.filter { keep || g.g.members[it.id]?.c == null }
+        val o = Outgoing(
+            id, g.num, plain ?: Plain("group", g = g.g.id, m = g.g.me), blobs, serverNow(), ttl,
+            group = g.g.id, copies = copies, cards = carried.takeIf { it.isNotEmpty() }?.associateBy { it.id }, body = body,
+        )
+        synchronized(posting) { posting += id }
+        try {
+            setOutbox(outbox.value + o)
+            val done = try {
+                postGroup(id, HashSet())
+            } catch (e: CancellationException) {
+                // the caller went away; flush delivers the remaining copies
+                throw e
+            } catch (e: Exception) {
+                setOutbox(outbox.value.filter { it.id != id })
+                throw e
+            }
+            setOutbox(if (done) outbox.value.filter { it.id != id } else outbox.value)
+        } finally {
+            synchronized(posting) { posting -= id }
+        }
+    }
+
+    private suspend fun postGroup(id: String, skip: MutableSet<String>): Boolean {
+        val start = outbox.value.find { it.id == id } ?: return true
+        for ((mid, postId) in start.copies.orEmpty()) {
+            val o = outbox.value.find { it.id == id } ?: return true
+            if (mid !in o.copies.orEmpty()) continue
+            val g = o.group?.let(::groupById)
+            val card = g?.g?.members?.get(mid)?.c ?: o.cards?.get(mid)
+            if (card == null) {
+                editOutbox(id) { it.copy(copies = it.copies.orEmpty() - mid) }
+                continue
+            }
+            val self = g != null && mid == g.g.me
+            if (!self && (card.server in skip || due(card.server) > System.currentTimeMillis())) {
+                skip += card.server
+                continue
+            }
+            if (o.held?.get(mid) == card.token) continue
+            try {
+                val stored = deliverCopy(o, card, postId, if (self) g else null)
+                editOutbox(id) { it.copy(copies = it.copies.orEmpty() - mid, held = it.held?.minus(mid)) }
+                if (self && stored != null) addMine(g!!.num, stored.id, stored.createdAt, stored.expiresAt, o.plain)
+                if (!self) synchronized(retry) { retry.remove(card.server) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Unreachable) {
+                skip += card.server
+                later(card.server, e.retryAfter)
+            } catch (e: Exception) {
+                when {
+                    e is Gone || (e is ApiException && e.code == 401) -> editOutbox(id) { it.copy(held = it.held.orEmpty() + (mid to card.token)) }
+                    self -> throw e
+                    else -> editOutbox(id) { it.copy(copies = it.copies.orEmpty() - mid) }
+                }
+            }
+        }
+        return outbox.value.find { it.id == id }?.copies.isNullOrEmpty()
+    }
+
+    private suspend fun deliverCopy(o: Outgoing, card: GroupCard, id: String, own: LocalGroup?): Mail? {
+        val plain = o.body ?: o.plain.toJson()
+        var i = 0
+        while (true) {
+            val devices = if (own != null) ownSealTo(i > 0) else memberDevices(o.group!!, card, i > 0)
+            if (devices.isEmpty() && own == null) throw IOException("${card.name} has no devices that can receive messages right now.")
+            val m = app.sealed.sealCopy(devices, o.ttl, plain, id, own != null)
+            try {
+                if (own == null) return app.api.linkSend(remoteOf(card), m)
+                return try {
+                    app.api.ownGroupMail(own.g.own.linkId, m.copy(blobs = o.blobs))
+                } catch (e: ApiException) {
+                    throw e
+                } catch (e: IOException) {
+                    throw Unreachable()
+                }
+            } catch (e: ApiException) {
+                if (e.code == 409) return null
+                if (e.code != 412 || i > 0) throw e
+            }
+            i++
+        }
+    }
+
+    // signing keys are kept to read a former member's mail
+    private suspend fun memberDevices(gid: String, c: GroupCard, fresh: Boolean = false): List<PublicDevice> {
+        val key = "$gid/${c.id}"
+        val hit = synchronized(memberLists) { memberLists[key] }
+        if (hit != null && !fresh && System.currentTimeMillis() - hit.first < 60_000) return hit.second
+        val r = app.api.linkDevices(remoteOf(c))
+        if (r.account != c.account) throw IOException("${c.name}'s server answered for someone else.")
+        val devices = r.devices.filter { app.sealed.certOk(it) }
+        synchronized(memberLists) { memberLists[key] = System.currentTimeMillis() to devices }
+        val g = groupById(gid) ?: return devices
+        val seen = devices.associate { it.id to it.signPub }
+        val cur = g.signers[c.id].orEmpty()
+        if (cur + seen != cur) {
+            editGroup(gid) { it.copy(signers = it.signers + (c.id to (it.signers[c.id].orEmpty() + seen))) }
+            saveContacts()
+        }
+        return devices
+    }
+
+    private suspend fun groupSigners(gid: String, sender: String, m: Mail): Map<String, String>? {
+        val g = groupById(gid) ?: return null
+        if (sender == g.g.me) {
+            if (m.fromDevice !in known) runCatching { refreshDevices() }
+            return ownSigners()
+        }
+        val e = g.g.members[sender]
+        val card = e?.c
+        if (card != null) {
+            if (g.signers[sender]?.containsKey(m.fromDevice) != true) runCatching { memberDevices(gid, card, fresh = true) }
+            return groupById(gid)?.signers?.get(sender).orEmpty()
+        }
+        val inv = g.g.inviter
+        if (inv != null && inv.member == sender) {
+            val c = contacts.value.find { it.id == inv.contact } ?: return null
+            return signersFor(c, m.fromDevice)
+        }
+        // a former member: only mail its server received before this account learned it left
+        val at = g.g.left?.get(sender)
+        return if (e != null && at != null && m.createdAt <= at) g.signers[sender] else null
+    }
+
+    // decrypted first, since the sender is named inside; nothing is used before the signature checks out
+    private suspend fun openGroup(gid: String, m: Mail): Opened? {
+        val raw = app.sealed.openSealed(m) ?: return null
+        val t = raw.string("t")
+        if ((t != "text" && t != "media" && t != "group") || raw.string("g") != gid) return null
+        val sender = raw.string("m") ?: return null
+        val signers = groupSigners(gid, sender, m) ?: return null
+        if (!app.sealed.signedBy(m, signers)) return null
+        groupById(gid)?.let { checkDevices(it.num, m, "to") }
+        return Opened(raw, sender)
+    }
+
+    private fun groupMessage(g: LocalGroup, m: Mail, plain: Plain?, sender: String): Message {
+        val uid = me.value?.id ?: 0L
+        val mine = sender == g.g.me
+        val raw = RawMessage(m.id, if (mine) uid else g.num, if (mine) g.num else uid, m.createdAt, m.expiresAt, if (mine) null else sender)
+        return Message(raw, plain)
+    }
+
+    // a second pass reads mail from members that states in the first pass added
+    private suspend fun readGroup(gid: String, list: List<Mail>): List<Message> {
+        val shown = mutableListOf<Pair<Mail, Opened>>()
+        val order = list.withIndex().associate { (i, m) -> m.id to i }
+        var rest = list
+        var pass = 0
+        while (pass < 2 && rest.isNotEmpty()) {
+            val later = mutableListOf<Mail>()
+            for (m in rest) {
+                val r = openGroup(gid, m)
+                when {
+                    r == null -> later += m
+                    r.raw.string("t") == "group" -> applyGroupState(gid, r.raw, m, r.sender)
+                    else -> shown += m to r
+                }
+                if (groupById(gid) == null) return emptyList()
+            }
+            rest = later
+            pass++
+        }
+        rotate(gid)
+        val g = groupById(gid) ?: return emptyList()
+        return shown
+            .sortedWith(compareBy<Pair<Mail, Opened>> { it.first.createdAt }.thenBy { order[it.first.id] })
+            .map { (m, r) -> groupMessage(g, m, r.plain, r.sender) }
+    }
+
+    private suspend fun takeGroupMail(gid: String, m: Mail) {
+        val num = groupById(gid)?.num ?: return
+        if (messages.value[num]?.any { it.raw.id == m.id } == true) return
+        val r = openGroup(gid, m) ?: return
+        if (r.raw.string("t") == "group") return applyGroupState(gid, r.raw, m, r.sender)
+        val g = groupById(gid) ?: return
+        val msg = groupMessage(g, m, r.plain, r.sender)
+        messages.update { n -> if (n[num]?.any { it.raw.id == m.id } == true) n else n + (num to (n[num].orEmpty() + msg).sortedBy { it.raw.createdAt }) }
+        if (r.sender == g.g.me) return
+        if (differs(r.raw["sv"], Crypto.membershipDigest(digestList(g.g.members)))) syncTo(gid, r.sender, m.id)
+        if (openChat == num && app.visible) {
+            markSeen(num)
+            if (app.calls.active.value == null) Notifications.chime(app)
+        } else {
+            notifyMessage(num, msg)
+        }
+    }
+
+    private fun syncTo(gid: String, member: String, mail: String) {
+        val key = "$gid/$member"
+        val now = System.currentTimeMillis()
+        synchronized(synced) {
+            if (now - (synced[key] ?: 0L) < 60_000) return
+            synced[key] = now
+        }
+        val c = groupById(gid)?.g?.members?.get(member)?.c ?: return
+        app.scope.launch { runCatching { sendState(gid, "sync:$mail", listOf(c)) } }
+    }
+
+    private suspend fun applyGroupState(gid: String, p: JsonObject, m: Mail, sender: String) {
+        val start = groupById(gid) ?: return
+        if (sender == start.g.me) return
+        val inviter = start.g.inviter
+        val bootstrap = inviter != null && sender == inviter.member
+        val before = goneCount(start.g.members)
+        cacheNames(gid)
+        val g = groupById(gid) ?: return
+        val r = applyState(g.g.state(), p, sender, stamp(), bootstrap) ?: return
+        if (bootstrap) {
+            val mine = r.state.members[g.g.me]?.c
+            val theirs = r.state.members[sender]?.c
+            val c = contacts.value.find { it.id == inviter?.contact }
+            val ok = c != null && mine != null && mine.server == ownServer() && mine.account == me.value?.id?.toString() &&
+                theirs != null && theirs.server == c.server && theirs.account == c.s.account
+            if (!ok) return
+        } else if (r.state == g.g.state()) {
+            return
+        }
+        val who = memberName(g.num, sender)
+        val t = serverNow()
+        editGroup(gid) {
+            val seen = it.g.left.orEmpty()
+            val left = if (r.gone.isEmpty()) it.g.left else seen + r.gone.associateWith { x -> minOf(seen[x] ?: t, t) }
+            val next = it.g.copy(name = r.state.name, ttl = r.state.ttl, members = r.state.members, left = left)
+            it.copy(g = if (bootstrap) next.copy(inviter = null, own = next.own.copy(base = goneCount(next.members).toLong())) else next)
+        }
+        if (bootstrap) addEvent(g.num, "You joined the group.")
+        cacheNames(gid)
+        touchGroup(gid, m.createdAt * 1000)
+        if (!bootstrap) for (x in r.added) addEvent(g.num, "$who added ${memberName(g.num, x)}.")
+        for (x in r.gone) addEvent(g.num, if (x == sender) "$who left." else "$who removed ${memberName(g.num, x)}.")
+        val cur = groupById(gid) ?: return
+        if (r.renamed && !bootstrap) addEvent(g.num, "$who renamed the group to ${cur.g.name.v}.")
+        if (r.timer && !bootstrap) addEvent(g.num, "$who set messages to expire after ${fmtTtl(cur.g.ttl.v)}.")
+        if (cur.g.members[cur.g.me]?.c == null) return leftGroup(gid, "$who removed you from ${cur.g.name.v}.")
+        if (goneCount(cur.g.members) > before) rotate(gid)
+    }
+
+    // every device of the account derives the same token; true when the full state went out
+    private suspend fun rotate(gid: String): Boolean {
+        val g = groupById(gid) ?: return false
+        val gen = ownGen(g.g)
+        val mine = g.g.members[g.g.me] ?: return false
+        val card = mine.c ?: return false
+        if (card.gen >= gen) return false
+        val token = Crypto.groupToken(Crypto.unb64(g.g.own.secret), gen)
+        try {
+            app.api.setGroupToken(g.g.own.linkId, gen, token)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "group token", e)
+            return false
+        }
+        val u = maxOf(stamp(), mine.u + 1)
+        editGroup(gid) {
+            it.copy(g = it.g.copy(members = it.g.members + (it.g.me to Member(u, card.copy(token = token, gen = gen))), own = it.g.own.copy(gen = maxOf(it.g.own.gen, gen))))
+        }
+        touchGroup(gid)
+        sendState(gid, "gen:$gen")
+        return true
+    }
+
+    private fun groupInvite(c: Contact, p: JsonObject, m: Mail) {
+        val gid = p.string("g")
+        val member = p.string("member")
+        val inviter = p.string("inviter")
+        val title = p.string("name")
+        val members = p["members"] as? JsonArray
+        if (gid == null || member == null || inviter == null || !isUuid(gid) || !isUuid(member) || !isUuid(inviter) || title == null || members == null) return
+        if (groups.value.any { it.g.id == gid } || groupPrompts.value.any { it.g == gid }) return
+        if ((goneGroups[gid] ?: -1L) >= m.createdAt * 1000 || m.createdAt + 7 * DAY < serverNow()) return
+        val shown = clip(title, 64).ifEmpty { "Group" }
+        val names = members.mapNotNull { (it as? JsonPrimitive)?.takeIf { x -> x.isString }?.content }.take(50)
+        val from = name(c.num)
+        groupPrompts.update { it + GroupPrompt(c.id, from, gid, shown, names, inviter, member) }
+        if (!app.visible) Notifications.invitation(app, "Group invitation", "$from invited you to $shown.")
+    }
+
+    // any of the inviting account's devices adds the member; the same message gives every device the same result
+    private fun groupJoin(c: Contact, p: JsonObject, m: Mail) {
+        val gid = p.string("g") ?: return
+        val g = groupById(gid) ?: return
+        val inv = g.g.invites[c.id] ?: return
+        if (inv.expires < serverNow()) return
+        val card = validCard(p["card"], inv.member) ?: return
+        if (card.server != c.server || card.account != c.s.account) return
+        editGroup(gid) { it.copy(g = it.g.copy(invites = it.g.invites - c.id, members = it.g.members + (inv.member to Member(m.createdAt * 1000, card)))) }
+        cacheNames(gid)
+        touchGroup(gid, m.createdAt * 1000)
+        addEvent(g.num, "${name(c.num)} joined.")
+        app.scope.launch { runCatching { sendState(gid, "join:${m.id}") }.onFailure { Log.w(TAG, "group join", it) } }
+    }
+
+    private fun groupDecline(c: Contact, p: JsonObject) {
+        val gid = p.string("g") ?: return
+        val g = groupById(gid) ?: return
+        if (c.id !in g.g.invites) return
+        editGroup(gid) { it.copy(g = it.g.copy(invites = it.g.invites - c.id)) }
+        touchGroup(gid)
+        addEvent(g.num, "${name(c.num)} declined.")
+    }
+
+    private fun cacheNames(gid: String) {
+        val g = groupById(gid) ?: return
+        val names = g.names + liveCards(g.g.members).associate { it.id to cardName(it) }
+        if (names != g.names) editGroup(gid) { it.copy(names = names) }
+    }
+
+    private fun touchGroup(gid: String, at: Long = stamp()) {
+        editGroup(gid) { it.copy(u = maxOf(at, it.u + 1)) }
+        saveContacts()
+        schedulePush()
+    }
+
+    private fun forgetGroup(gid: String, notice: String? = null) {
+        val g = groupById(gid) ?: return
+        goneGroups = goneGroups + (gid to maxOf(stamp(), g.u + 1))
+        dropGroup(g)
+        schedulePush()
+        notice?.let(::toast)
+    }
+
+    private fun leftGroup(gid: String, notice: String) {
+        val g = groupById(gid) ?: return
+        app.scope.launch { runCatching { app.api.revokeLink(g.g.own.linkId) } }
+        forgetGroup(gid, notice)
+    }
+
+    private fun dropGroup(g: LocalGroup) {
+        val num = g.num
+        groups.update { list -> list.filter { it.g.id != g.g.id } }
+        messages.update { it - num }
+        events.update { it - num }
+        drafts.update { it - num }
+        opened.update { it - num }
+        seen.update { it - num }
+        deviceAlerts.update { it - num }
+        val keep = outbox.value.filter { it.group != g.g.id || it.cards != null }
+        if (keep.size != outbox.value.size) setOutbox(keep)
+        detach(num)
+        synchronized(memberLists) { memberLists.keys.removeAll { it.startsWith("${g.g.id}/") } }
+        me.value?.id?.let {
+            sp.edit {
+                remove("seen.$it.$num")
+                remove("notified.$it.$num")
+            }
+        }
+        saveContacts()
+        Notifications.cancelMessages(app, num)
+    }
+
+    // a former member's files went with its group link
+    fun mediaGone(num: Long, n: Message): Boolean {
+        val g = group(num) ?: return false
+        val sender = n.raw.sender ?: return false
+        return g.g.members[sender]?.c == null
+    }
+
+    fun mediaFrom(num: Long, n: Message): Remote? {
+        val g = group(num) ?: return if (n.raw.fromUser == me.value?.id) contact(num) else null
+        if (n.raw.fromUser == me.value?.id) return null
+        val sender = n.raw.sender ?: return null
+        return g.g.members[sender]?.c?.let(::remoteOf)
     }
 
     fun callEnded(peer: Peer, secs: Long?, reason: String) {
@@ -1157,6 +1986,7 @@ class Repo(private val app: CawApp) {
     fun clear() {
         me.value = null
         contacts.value = emptyList()
+        groups.value = emptyList()
         messages.value = emptyMap()
         events.value = emptyMap()
         opened.value = emptySet()
@@ -1166,6 +1996,7 @@ class Repo(private val app: CawApp) {
         attachments.value = emptyMap()
         outbox.value = emptyList()
         prompts.value = emptyList()
+        groupPrompts.value = emptyList()
         unreachable.value = null
         vaultLocked.value = false
         contactsLoaded.value = false
@@ -1179,8 +2010,14 @@ class Repo(private val app: CawApp) {
         signInSecret = null
         vaultVersion = 0
         gone = emptyMap()
+        goneGroups = emptyMap()
+        groupLinks = emptySet()
+        vaultExtra = emptyMap()
         known = emptyMap()
         peers.clear()
+        synchronized(memberLists) { memberLists.clear() }
+        synchronized(synced) { synced.clear() }
+        synchronized(posting) { posting.clear() }
         synchronized(retry) { retry.clear() }
         app.media.clear()
         openChat = null
@@ -1216,6 +2053,7 @@ class Repo(private val app: CawApp) {
                 val id = e.str("link_id")
                 prompts.update { p -> p.filter { it.linkId != id } }
                 contacts.value.find { it.inLink == id }?.let { forget(it) }
+                groups.value.find { it.g.own.linkId == id }?.let { forgetGroup(it.g.id) }
             }
             "error" -> if (e["call_id"] == null) Log.w(TAG, "server: ${e.str("message")}") else app.calls.handle(e)
             "pong" -> {}
@@ -1231,6 +2069,9 @@ class Repo(private val app: CawApp) {
         private const val PENDING_SECS = 1800L
         // deliberately slow: one attempt per step for an unreachable server
         private val BACKOFF = longArrayOf(60, 300, 900, 1800, 3600, 7200, 14400, 21600)
+        private val NAME = Reg.serializer(String.serializer())
+        private val TTL = Reg.serializer(Long.serializer())
+        private val MEMBERS = MapSerializer(String.serializer(), Member.serializer())
     }
 }
 

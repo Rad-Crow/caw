@@ -24,6 +24,7 @@ object Notifications {
     const val ID_ONGOING = 2
     private const val ID_MESSAGE_BASE = 1000
     private const val ID_SECURITY = 900
+    private const val ID_INVITATION = 901
 
     private const val FLAGS = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
 
@@ -143,6 +144,18 @@ object Notifications {
             b.setContentTitle("New message")
         }
         nm(ctx).notify(if (show) ID_MESSAGE_BASE + fromId.toInt() else ID_MESSAGE_BASE, b.build())
+    }
+
+    fun invitation(ctx: Context, title: String, body: String) {
+        val open = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java), FLAGS)
+        val b = NotificationCompat.Builder(ctx, CH_MESSAGES)
+            .setSmallIcon(R.drawable.ic_logo)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentTitle(title)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+        if (!ctx.app.prefs.privateMessages) b.setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        nm(ctx).notify(ID_INVITATION, b.build())
     }
 
     // account security: a new device, or a message also sealed for an unknown device

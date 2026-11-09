@@ -39,13 +39,15 @@ const ctx = async (name) => {
   return p
 }
 const step = (s) => console.log('--', s)
+// a contact's row by its exact name; group previews also mention members
+const row = (p, name) => p.locator('.caw-row', { has: p.locator('strong', { hasText: new RegExp(`^${name}$`) }) })
 const vaultPut = (p) => p.waitForResponse((r) => r.url().endsWith('/api/vault') && r.request().method() === 'PUT')
 const PW = { alice: 'amber kettle orbit', alice2: 'violet canyon drum', bobTemp: 'temp-pass-2', bob: 'maple tunnel glow', carol: 'cedar violin dusk' }
 const a = await ctx('alice')
-let b, c
+let b, c, a2
 process.on('uncaughtException', async (e) => {
-  console.log('FAIL', e.message.split('\n')[0])
-  for (const [n, p] of [['alice', a], ['bob', b], ['carol', c]]) {
+  console.log('FAIL', e.message.split('\n').slice(0, 6).join('\n'))
+  for (const [n, p] of [['alice', a], ['bob', b], ['carol', c], ['alice2', a2]]) {
     if (p) await p.screenshot({ path: `/out/fail-${n}.png` }).catch(() => {})
   }
   process.exit(1)
@@ -411,7 +413,7 @@ step('calls ran through noise suppression')
 await b.screenshot({ path: '/out/caw.png' })
 
 // second browser for alice: no pairing or approval; contacts come from the vault
-const a2 = await login('alice2', 'alice', PW.alice)
+a2 = await login('alice2', 'alice', PW.alice)
 await a.getByText('New device signed in').waitFor({ timeout: 10000 })
 await a2.locator('.caw-row', { hasText: 'Bob' }).waitFor({ timeout: 10000 })
 await a2.locator('.caw-row', { hasText: 'Carol' }).locator('.fav-mark').waitFor()
@@ -436,6 +438,105 @@ await a.getByRole('button', { name: 'Answer' }).waitFor({ state: 'detached' })
 await b.getByRole('button', { name: 'Hang up' }).click()
 await a2.locator('.callbar').waitFor({ state: 'detached' })
 step('a call rang both devices; answered on one, the other stopped ringing')
+
+// bob (server 1) and carol (server 2) are not contacts of each other
+await a.locator('.group-fab').click()
+await a.getByLabel('Group name').fill('Friends')
+await a.locator('.new-group').getByLabel('Search contacts').fill('bo')
+await a.locator('.new-group .pick-row', { hasText: 'Bob' }).click()
+await a.locator('.new-group').getByLabel('Search contacts').fill('')
+await a.locator('.new-group .pick-row', { hasText: 'Carol' }).click()
+await a.locator('.new-group .chip', { hasText: 'Bob' }).waitFor()
+await a.getByRole('button', { name: 'Create group' }).click()
+await a.locator('.caw-head strong', { hasText: 'Friends' }).waitFor()
+for (const p of [b, c]) {
+  await p.getByRole('dialog', { name: 'Group invitation' }).waitFor({ timeout: 15000 })
+  await p.getByRole('button', { name: 'Join' }).click()
+  await p.locator('.event', { hasText: 'You joined the group.' }).waitFor({ timeout: 15000 })
+}
+await b.locator('.event', { hasText: 'Alice added Carol.' }).waitFor({ timeout: 15000 })
+step('alice created a group; bob and carol accepted and joined')
+
+await b.getByPlaceholder('Message to Friends').fill('hello group')
+await b.keyboard.press('Enter')
+await c.locator('.msg', { hasText: 'hello group' }).locator('.sender', { hasText: 'Bob' }).waitFor({ timeout: 15000 })
+await a.locator('.msg', { hasText: 'hello group' }).locator('.sender', { hasText: 'Bob' }).waitFor({ timeout: 15000 })
+// carol's copies to alice and bob go through their group links
+const carolLinks = []
+const capture = (r) => {
+  const auth = r.headers()['authorization']
+  if (auth?.startsWith('Link ') && r.url().endsWith('/api/link/mail') && r.url().startsWith(B)) carolLinks.push({ url: r.url(), auth })
+}
+c.on('request', capture)
+await c.getByPlaceholder('Message to Friends').fill('hi from the other server')
+await c.keyboard.press('Enter')
+await b.locator('.msg', { hasText: 'hi from the other server' }).locator('.sender', { hasText: 'Carol' }).waitFor({ timeout: 15000 })
+c.off('request', capture)
+await a2.locator('.caw-row', { hasText: 'Friends' }).locator('.caw-item').click()
+await a2.locator('.bubble', { hasText: 'hi from the other server' }).waitFor({ timeout: 15000 })
+step("bob and carol message the group across servers; alice's second device has it from the vault")
+
+await c.evaluate(async () => {
+  const cv = document.createElement('canvas')
+  cv.width = 800
+  cv.height = 400
+  const g = cv.getContext('2d')
+  g.fillStyle = '#36c'
+  g.fillRect(0, 0, 800, 400)
+  const blob = await new Promise((r) => cv.toBlob(r, 'image/png'))
+  const dt = new DataTransfer()
+  dt.items.add(new File([blob], 'group.png', { type: 'image/png' }))
+  const input = document.querySelector('.composer input[type=file]')
+  input.files = dt.files
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+})
+await c.locator('.attachment', { hasText: /Photo/ }).waitFor()
+await c.getByPlaceholder('Message to Friends').fill('a photo')
+await c.keyboard.press('Enter')
+await c.locator('.attachment').waitFor({ state: 'detached' })
+await b.locator('.msg', { hasText: 'a photo' }).locator('.media img:not(.blur)').waitFor({ timeout: 15000 })
+await a.locator('.msg', { hasText: 'a photo' }).locator('.media img:not(.blur)').waitFor({ timeout: 15000 })
+step("carol's photo, uploaded once to her server, opened for bob and alice")
+
+await c.locator('.caw-head .contact-btn').click()
+await c.locator('.group-pop').getByLabel('Name').fill('Family')
+await c.locator('.group-pop').getByRole('button', { name: 'Save' }).click()
+await a.locator('.event', { hasText: 'Carol renamed the group to Family.' }).waitFor({ timeout: 15000 })
+await c.getByRole('button', { name: '1 day' }).click()
+await c.getByRole('menuitemradio', { name: '1 hour' }).click()
+await b.locator('.event', { hasText: 'Carol set messages to expire after 1 hour.' }).waitFor({ timeout: 15000 })
+step('carol renamed the group and changed its timer')
+
+if (!carolLinks.length) throw new Error("no group link captured from carol's sends")
+await b.locator('.caw-head .contact-btn').click()
+const carolRow = b.locator('.group-pop .members li', { hasText: 'Carol' })
+await carolRow.getByRole('button', { name: 'Remove' }).click()
+await carolRow.getByRole('button', { name: 'Tap again' }).click()
+await c.getByText('Bob removed you from Family.').waitFor({ timeout: 15000 })
+await c.locator('.caw-row', { hasText: 'Family' }).waitFor({ state: 'detached' })
+await a.locator('.event', { hasText: 'Bob removed Carol.' }).waitFor({ timeout: 15000 })
+await b.getByPlaceholder('Message to Family').fill('after carol left')
+await b.keyboard.press('Enter')
+await a.locator('.bubble', { hasText: 'after carol left' }).waitFor({ timeout: 15000 })
+await a.reload()
+await a.locator('.caw-row', { hasText: 'Family' }).locator('.caw-item').click()
+await a.locator('.bubble', { hasText: 'hello group' }).waitFor({ timeout: 15000 })
+const { url, auth } = carolLinks[0]
+const del = await fetch(url.replace(/\/mail$/, ''), { method: 'DELETE', headers: { authorization: auth } })
+const read = await fetch(url, { headers: { authorization: auth } })
+if (del.status !== 403 || read.status !== 403) throw new Error(`a group link token deleted or read the link: ${del.status} ${read.status}`)
+step('bob removed carol; alice and bob keep messaging; history survives a reload; a group token cannot delete or read a link')
+
+await b.locator('.caw-head .contact-btn').click()
+await b.locator('.group-pop').getByRole('button', { name: 'Leave group' }).click()
+await b.locator('.group-pop').getByRole('button', { name: 'Tap again to leave' }).click()
+await b.locator('.caw-row', { hasText: 'Family' }).waitFor({ state: 'detached' })
+await a.locator('.event', { hasText: 'Bob left.' }).waitFor({ timeout: 15000 })
+await a.getByPlaceholder('Message to Family').fill('just me now')
+await a.keyboard.press('Enter')
+await a.locator('.msg.mine', { hasText: 'just me now' }).locator('.meta', { hasText: /left/ }).waitFor({ timeout: 15000 })
+await row(a, 'Bob').locator('.caw-item').click()
+step('bob left the group')
 
 // alice's server reports a device alice does not have
 const raw = (k) => Buffer.from(k.export({ format: 'jwk' }).x, 'base64url')
@@ -479,28 +580,32 @@ await a2.getByLabel('Password').fill(PW.alice)
 await a2.getByRole('button', { name: 'Sign in' }).click()
 await a2.getByText('Incorrect username or password.').waitFor()
 await signIn(a2, 'alice', PW.alice2)
-await a2.locator('.caw-row', { hasText: 'Bob' }).waitFor({ timeout: 10000 })
+await row(a2, 'Bob').waitFor({ timeout: 10000 })
 await a.reload()
-await a.locator('.caw-row', { hasText: 'Bob' }).waitFor()
-step('"That wasn\'t me" signed the other device out, changed the password and replaced the vault key; the new password unlocks it')
+await row(a, 'Bob').waitFor()
+await row(a, 'Family').locator('.caw-item').click()
+await a.locator('.bubble', { hasText: 'just me now' }).waitFor({ timeout: 15000 })
+await a.locator('.bubble', { hasText: 'after carol left' }).waitFor()
+await row(a, 'Bob').locator('.caw-item').click()
+step('"That wasn\'t me" signed the other device out, changed the password and replaced the vault key; the new password unlocks it, groups included')
 await a2.close()
 
-await a.locator('.caw-row', { hasText: 'Carol' }).locator('.caw-item').click()
+await row(a, 'Carol').locator('.caw-item').click()
 await a.locator('.contact-btn').click()
 await a.getByRole('button', { name: 'Remove contact' }).click()
 await a.getByRole('button', { name: 'Tap again to remove' }).click()
-await a.locator('.caw-row', { hasText: 'Carol' }).waitFor({ state: 'detached' })
+await row(a, 'Carol').waitFor({ state: 'detached' })
 await c.getByText('Alice is no longer a contact.').waitFor({ timeout: 10000 })
-await c.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
+await row(c, 'Alice').waitFor({ state: 'detached' })
 step('removing a contact removes it on the other side too')
 
 // alice removes the link without notifying bob; bob's next send finds it gone
-const linkId = await a.evaluate(async () => (await (await fetch('/api/links')).json())[0].id)
+const linkId = await a.evaluate(async () => (await (await fetch('/api/links')).json()).find((l) => l.kind === 'contact').id)
 await a.evaluate(async (id) => fetch(`/api/links/${id}`, { method: 'DELETE' }), linkId)
 await b.getByPlaceholder('Message to Alice').fill('anyone there?')
 await b.keyboard.press('Enter')
 await b.getByText('Alice is no longer reachable and was removed from your contacts.').waitFor({ timeout: 10000 })
-await b.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
+await row(b, 'Alice').waitFor({ state: 'detached' })
 step('a gone link removes the contact with a notice')
 
 await browser.close()

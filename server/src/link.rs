@@ -11,11 +11,36 @@ use crate::{
     App,
 };
 
-// a contact's capability to reach one account on this server
+// a capability to reach one account on this server: a contact's, or a group's shared by its members
 #[derive(Clone, Debug)]
 pub struct Link {
     pub id: String,
     pub user_id: i64,
+    pub group: bool,
+}
+
+impl Link {
+    // operations reserved for a contact link; a group token is held by every member
+    pub fn contact_only(&self) -> Result<()> {
+        if self.group {
+            return Err(AppError::Forbidden("Not available for group links.".into()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct Row {
+    id: String,
+    user_id: i64,
+    token_hash: String,
+    kind: String,
+    prev_token_hash: Option<String>,
+    prev_until: Option<i64>,
+}
+
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // "<link id>.<token>", from the Authorization header ("Link ...") or a ?link= query (websockets can't set headers in browsers)
@@ -36,25 +61,30 @@ fn credential(parts: &Parts) -> Option<String> {
 
 pub async fn authenticate(app: &App, cred: &str) -> Result<Link> {
     let (id, token) = cred.split_once('.').ok_or(AppError::Unauthorized)?;
-    let row: Option<(String, i64, String)> =
-        sqlx::query_as("SELECT id, user_id, token_hash FROM links WHERE id = ?")
+    let row: Option<Row> =
+        sqlx::query_as("SELECT id, user_id, token_hash, kind, prev_token_hash, prev_until FROM links WHERE id = ?")
             .bind(id)
             .fetch_optional(&app.db)
             .await?;
     // unknown ids also return 410, so absent and removed links are indistinguishable
-    let (id, user_id, token_hash) = row.ok_or_else(|| AppError::Gone("This contact is no longer available.".into()))?;
+    let row = row.ok_or_else(|| AppError::Gone("This contact is no longer available.".into()))?;
     let th = hash_token(token);
-    if th.len() != token_hash.len() || th.bytes().zip(token_hash.bytes()).fold(0, |a, (x, y)| a | (x ^ y)) != 0 {
+    let t = now();
+    let previous = row.prev_token_hash.is_some_and(|p| same(&th, &p)) && row.prev_until.is_some_and(|u| u > t);
+    if !same(&th, &row.token_hash) && !previous {
         return Err(AppError::Unauthorized);
     }
-    let t = now();
     sqlx::query("UPDATE links SET last_used = ? WHERE id = ? AND last_used < ?")
         .bind(t)
-        .bind(&id)
+        .bind(&row.id)
         .bind(t - 300)
         .execute(&app.db)
         .await?;
-    Ok(Link { id, user_id })
+    Ok(Link {
+        group: row.kind == "group",
+        id: row.id,
+        user_id: row.user_id,
+    })
 }
 
 impl FromRequestParts<Arc<App>> for Link {

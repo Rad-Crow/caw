@@ -246,12 +246,12 @@ fun AddContactScreen(onAdded: (Long) -> Unit, onBack: () -> Unit) {
     }
 }
 
-// pairing requests and unreachable contacts, shown on any screen
 @Composable
 fun ContactPrompts(onOpen: (Long) -> Unit) {
     val app = LocalContext.current.app
     val scope = rememberCoroutineScope()
     val prompts by app.repo.prompts.collectAsStateWithLifecycle()
+    val groupPrompts by app.repo.groupPrompts.collectAsStateWithLifecycle()
     val unreachable by app.repo.unreachable.collectAsStateWithLifecycle()
     val contacts by app.repo.contacts.collectAsStateWithLifecycle()
 
@@ -270,6 +270,10 @@ fun ContactPrompts(onOpen: (Long) -> Unit) {
             confirmButton = { TextButton(onClick = { scope.launch { onOpen(app.repo.acceptPrompt(p)) } }) { Text("Accept") } },
             dismissButton = { TextButton(onClick = { scope.launch { app.repo.declinePrompt(p) } }) { Text("Decline") } },
         )
+        return
+    }
+    groupPrompts.firstOrNull()?.let {
+        GroupInvitation(it, onOpen)
         return
     }
     val c = unreachable?.let { n -> contacts.find { it.num == n } } ?: return

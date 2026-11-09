@@ -125,6 +125,31 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
 
     suspend fun myLinks(): List<LinkRow> = get("/api/links")
 
+    suspend fun createGroupLink(gen: Long, token: String): LinkCred {
+        val body = buildJsonObject {
+            put("kind", "group")
+            put("gen", gen)
+            put("token", token)
+        }
+        return json.decodeFromString(call("POST", "/api/links", body))
+    }
+
+    suspend fun setGroupToken(id: String, gen: Long, token: String) {
+        val body = buildJsonObject {
+            put("gen", gen)
+            put("token", token)
+        }
+        call("PUT", "/api/links/$id/token", body)
+    }
+
+    suspend fun ownGroupMail(id: String, m: NewMail): Mail =
+        json.decodeFromString(call("POST", "/api/links/$id/mail", json.encodeToJsonElement(NewMail.serializer(), m).jsonObject))
+
+    suspend fun ownUpload(id: String, body: ByteArray, onProgress: (Float) -> Unit): String {
+        val base = prefs.server?.trimEnd('/') ?: throw IOException("no server set")
+        return blobId(send(base + "/api/links/$id/blobs", "Bearer ${prefs.token}", "POST", counted(body, onProgress)))
+    }
+
     suspend fun revokeLink(id: String) {
         call("DELETE", "/api/links/$id")
     }
@@ -144,11 +169,14 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
 
     // --- contact's server via the outbound link. 410: link revoked; no response or 5xx: server down
 
-    private suspend fun remote(c: Remote, method: String, path: String, body: RequestBody? = null): String = withContext(Dispatchers.IO) {
+    private suspend fun remote(c: Remote, method: String, path: String, body: RequestBody? = null): String =
+        send(c.server + path, "Link ${c.out.linkId}.${c.out.token}", method, body)
+
+    private suspend fun send(url: String, auth: String, method: String, body: RequestBody?): String = withContext(Dispatchers.IO) {
         val req = Request.Builder()
-            .url(c.server + path)
+            .url(url)
             .method(method, body)
-            .header("Authorization", "Link ${c.out.linkId}.${c.out.token}")
+            .header("Authorization", auth)
             .build()
         val res = try {
             http.newCall(req).execute()
@@ -186,9 +214,9 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
         }
     }
 
-    suspend fun linkUpload(c: Remote, body: ByteArray, onProgress: (Float) -> Unit): String {
+    private fun counted(body: ByteArray, onProgress: (Float) -> Unit): RequestBody {
         val type = "application/octet-stream".toMediaType()
-        val counted = object : RequestBody() {
+        return object : RequestBody() {
             override fun contentType() = type
             override fun contentLength() = body.size.toLong()
             override fun writeTo(sink: BufferedSink) {
@@ -201,9 +229,12 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
                 }
             }
         }
-        val text = remote(c, "POST", "/api/link/blobs", counted)
-        return json.parseToJsonElement(text).jsonObject.str("id") ?: throw IOException("Upload failed.")
     }
+
+    private fun blobId(text: String): String = json.parseToJsonElement(text).jsonObject.str("id") ?: throw IOException("Upload failed.")
+
+    suspend fun linkUpload(c: Remote, body: ByteArray, onProgress: (Float) -> Unit): String =
+        blobId(remote(c, "POST", "/api/link/blobs", counted(body, onProgress)))
 
     // authorized by the ticket alone
     suspend fun redeem(server: String, ticket: String, peerServer: String, peerAccount: String): LinkCred = withContext(Dispatchers.IO) {

@@ -1,5 +1,6 @@
 import { aesGcm, b64, concat, random, unb64, type Bytes } from './crypto'
 import { LOCAL_FIELDS, type Contact } from './contacts'
+import type { Group } from './groups'
 
 export type Synced = Omit<Contact, (typeof LOCAL_FIELDS)[number]>
 
@@ -7,6 +8,8 @@ export type Synced = Omit<Contact, (typeof LOCAL_FIELDS)[number]>
 export interface VaultDoc {
   v: 1
   contacts: Record<string, { u: number; c?: Synced; gone?: true }>
+  groups?: Record<string, { u: number; g?: Group; gone?: true }>
+  [key: string]: unknown
 }
 
 export interface VaultResp {

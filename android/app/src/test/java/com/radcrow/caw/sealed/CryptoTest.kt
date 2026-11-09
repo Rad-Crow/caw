@@ -55,6 +55,16 @@ class CryptoTest {
         assertEquals("caw-call-v1\ncall-id\noffer\nv=0", String(Crypto.callSig("call-id", "offer", "v=0")))
     }
 
+    // docs/protocol.md, section 13
+    @Test
+    fun groupVectors() {
+        val secret = unb64("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+        assertEquals("b2I-Q59lwHpXXMEbWcdxsbZsZI5UY58weNd-dFeHtD8", Crypto.groupToken(secret, 3))
+        assertEquals("ada5b3c3-c255-8e7d-838a-5680fe5a3fd6", Crypto.groupMessageId(secret, "gen:3", "6f1c2a4e-0b7d-4e8a-9c3f-2d5e8a1b7c90"))
+        val list = "0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f:2,7d9e1f20-3a4b-4c5d-8e6f-708192a3b4c5:x,e1d2c3b4-a5f6-4789-8a9b-0c1d2e3f4a5b:0"
+        assertEquals("zLiWXmP0hasivgj-C9CGPA", Crypto.membershipDigest(list))
+    }
+
     // vector from hash-wasm, as used by the web client
     @Test
     fun argon2idVector() {

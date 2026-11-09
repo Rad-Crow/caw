@@ -68,6 +68,7 @@ pub async fn guest(
     Query(q): Query<WsQuery>,
     link: Link,
 ) -> Result<Response> {
+    link.contact_only()?;
     let who = Who::Guest {
         link: link.id,
         user: link.user_id,

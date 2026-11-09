@@ -14,10 +14,11 @@ This document specifies the formats, algorithms and behavior required for intero
 6. [Contacts](#6-contacts)
 7. [Messages](#7-messages)
 8. [Calls](#8-calls)
-9. [Push notifications](#9-push-notifications)
-10. [Server requirements](#10-server-requirements)
-11. [Client storage](#11-client-storage)
-12. [Test vectors](#12-test-vectors)
+9. [Groups](#9-groups)
+10. [Push notifications](#10-push-notifications)
+11. [Server requirements](#11-server-requirements)
+12. [Client storage](#12-client-storage)
+13. [Test vectors](#13-test-vectors)
 
 ## 1. Conventions
 
@@ -50,6 +51,7 @@ A server is identified by its base URL (scheme and authority, no trailing slash)
 | AES-GCM | 12-byte nonce, 16-byte tag; key size as stated |
 | Argon2id | RFC 9106, version 0x13 |
 | PBKDF2 | RFC 8018, HMAC-SHA256 |
+| HMAC-SHA256 | RFC 2104 with SHA-256 |
 
 Labels:
 
@@ -63,6 +65,8 @@ Labels:
 | `caw-words-v1` | verification words ([6.4](#64-verification-words)) |
 | `caw-key-v1` | data key wrapping AAD ([4.1](#41-data-key)) |
 | `caw-vault-v1` | vault AAD ([4.2](#42-document)) |
+| `caw-group-token-v1` | group link token ([9.1](#91-group-links)) |
+| `caw-group-id-v1` | derived group message id ([9.5](#95-sending)) |
 | `caw:1:` | pairing code prefix ([6.2](#62-pairing-code)) |
 
 ## 3. Accounts and credentials
@@ -101,7 +105,7 @@ wrapped = salt "." m "." t "." p "." b64(nonce || AES-256-GCM(password key, nonc
 
 ```
 blob = b64(nonce || AES-256-GCM(data key, nonce, aad = "caw-vault-v1", UTF-8(JSON(document))))
-document = { "v": 1, "contacts": { <contact id>: <entry> } }
+document = { "v": 1, "contacts": { <contact id>: <entry> }, "groups": { <group id>: <group entry> } }
 entry    = { "u": <ms>, "c": <contact> } | { "u": <ms>, "gone": true }
 ```
 
@@ -123,7 +127,7 @@ Contact record:
 | `words` | array of 6 strings, optional | verification words |
 | `updated_at` | integer | milliseconds; equal to the entry's `u` |
 
-Clients MUST ignore unknown fields.
+Clients MUST ignore unknown fields. Groups are described in [9.10](#910-vault).
 
 ### 4.3 Merge
 
@@ -194,7 +198,7 @@ For each message the device reads, where `own` is `to` for a message received th
 
 ### 6.1 Links
 
-A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Servers return `410` for unknown and revoked link ids.
+A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Group links are described in [9.1](#91-group-links). Servers return `410` for unknown and revoked link ids.
 
 ### 6.2 Pairing code
 
@@ -245,7 +249,7 @@ A JSON object with type `t`:
 | `accept`, `decline`, `bye` | none |
 | `timer` | `ttl`: integer seconds |
 
-`hello`, `accept`, `decline`, `timer` and `bye` are control messages and are not displayed.
+`hello`, `accept`, `decline`, `timer` and `bye` are control messages and are not displayed. Group messages are described in [9.4](#94-messages).
 
 ### 7.2 Encryption
 
@@ -362,7 +366,141 @@ A connection that closes during a call keeps its place for 30 seconds. A client 
 
 After a call in which the callee's devices were rung, the caller sends a `call` message with the outcome and, if answered, the duration in seconds. No record is sent for a call ended by a failed verification.
 
-## 9. Push notifications
+## 9. Groups
+
+A group is a conversation among accounts that may be on different servers. Each member receives the group's messages on its own server; the sender posts every group message to the server of each member. Servers do not learn group membership.
+
+### 9.1 Group links
+
+A member receives a group's mail through one group link on its own server, created with `POST /api/links {kind: "group", gen, token}`. Every member holds its token. Through a group link, servers accept only `POST /api/link/mail` without `blobs`, `GET /api/link/devices` and `GET /api/link/blobs/{id}`. The owner posts its own copies with `POST /api/links/{id}/mail`, uploads attachments with `POST /api/links/{id}/blobs` and replaces the token with `PUT /api/links/{id}/token`; the replaced token remains valid for 24 hours.
+
+```
+token(gen) = b64(HMAC-SHA256(secret, "caw-group-token-v1" || u64be(gen)))
+```
+
+`secret` is 32 random bytes per account and group, held in the vault and never sent to members.
+
+### 9.2 State
+
+Group ids and member ids are UUIDs. A member id is chosen when the member is invited or creates the group.
+
+| card field | |
+|---|---|
+| `id` | member id |
+| `server`, `account` | the member's server base URL and account id |
+| `name` | display name, 1 to 64 characters |
+| `link_id`, `token`, `gen` | the member's group link and its token generation |
+
+```
+state = { "name": {"v": <string>, "u": <ms>}, "ttl": {"v": <seconds>, "u": <ms>}, "members": { <member id>: entry } }
+entry = { "u": <ms>, "c": <card> } | { "u": <ms>, "gone": true }
+```
+
+A member is live if its entry has a card, and gone otherwise. `u` values are integers below 2^53. A member's own token generation is `gen = gone - base`, where `gone` is the number of gone entries and `base` is that number in the first state the member accepted.
+
+### 9.3 Applying a state
+
+A device applies a state received from member `m` to its local state `L`:
+
+1. The state is ignored unless `m` is live in `L`, or is the inviter before the first state (9.7).
+2. For each entry `e` of member `x`:
+   - `x` gone in `L`: no change.
+   - `e` gone: `x` becomes gone.
+   - `x` absent from `L`: `e` is added if `e.c.id` is `x` and the card is well formed: UUID ids, `server` an `http` or `https` base URL of at most 255 characters, `account` and `name` of 1 to 64 characters, `token` 32 bytes, `gen` a non-negative integer.
+   - `x` live in `L`: `e.c` replaces the card only if `m` is `x`, `server`, `account` and `link_id` are unchanged and `gen` is greater.
+3. `name` and `ttl` are replaced if `u` is greater, or equal with a greater `v` (strings compared by code units). A `u` more than 86400000 ahead of the device's clock is ignored.
+4. If two live entries have the same `server` and `account`, the one with the greater (`u`, member id) becomes gone.
+5. If the result has more than 256 entries, the state is ignored.
+
+If the own entry became gone, the device leaves the group (9.9). Otherwise, if the number of gone entries increased, the account replaces its token (9.8).
+
+### 9.4 Messages
+
+Group messages are `text` and `media` (7.1) with `g` (group id), `m` (sender member id) and `sv` (membership digest):
+
+```
+sv   = b64(SHA-256(UTF-8(list))[0..16])
+list = for each entry sorted by member id: id ":" (c.gen in decimal, or "x" if gone), joined with ","
+```
+
+| `t` | sent through | fields |
+|---|---|---|
+| `group` | group links | `g`, `m`, `name`, `ttl`, `members` |
+| `group_invite` | the contact's link | `g`, `name`, `members` (names), `inviter` (member id), `member` (the invitee's member id), `text` |
+| `group_join` | the contact's link | `g`, `card` |
+| `group_decline` | the contact's link | `g` |
+
+`group` carries the sender's full state, except the notice to a removed member (9.9). `group_invite.text` is for clients without group support. Control messages are sent with the server's maximum message lifetime.
+
+Through a group link, only `text`, `media` and `group` with `g` equal to the group are accepted. Through a contact link, `group`, and `text` or `media` with `g`, are discarded.
+
+### 9.5 Sending
+
+A group message is sealed separately for each live member, the own account first. Each copy has its own id, `ck`, body and signature (7.2-7.4), with stanzas `o = "to"` for every valid device of that member's account; the own copy includes the sending device with its newest key.
+
+- The own copy is posted with `POST /api/links/{id}/mail` on the own server, listing attachments in `blobs`.
+- Other copies are posted with `POST /api/link/mail` on the member's server through its card's link, without `blobs`.
+
+A member's device list is read with `GET /api/link/devices` through its card's link; `account` MUST equal the card's. Responses are handled as in 7.5, except that 401 and 410 keep the copy queued until the member's card changes, and 429 is retried after `Retry-After`. A queued copy is dropped when its message expires.
+
+A message sent in response to a received one uses a derived id, so that every device of the account sends the same copy and duplicates are refused with 409:
+
+```
+id = uuid8(HMAC-SHA256(secret, "caw-group-id-v1" || UTF-8(trigger) || 0x00 || UTF-8(member id))[0..16])
+```
+
+`trigger` is `join:` followed by the join message id, `gen:` followed by the new generation, or `sync:` followed by the received message id. `uuid8` sets byte 6 to `byte 6 & 0x0f | 0x80` and byte 8 to `byte 8 & 0x3f | 0x80` and formats a lowercase UUID string.
+
+An attachment (7.10) is uploaded once with `POST /api/links/{id}/blobs` and attached to the own copy. Members download it with `GET /api/link/blobs/{id}` through the sender's group link.
+
+### 9.6 Reading
+
+Mail received through a group link (`kind` in `GET /api/links`) belongs to that group and is never a pairing request (6.3).
+
+1. Decrypt with the own stanza (7.6, steps 1 and 3).
+2. Require `g` to be the group, and `m` to be the own member id, a live member, a former member whose mail has a `created_at` no later than its entry in `left`, or the inviter before the first state.
+3. Verify `sig` with the identity key of `from_device`: for the own member id from the own known records (5.4), otherwise from the device list of `m`'s account read through `m`'s link, or through the contact's link for the inviter before the first state. Members' identity keys are retained while the group is kept, so that mail from former members stays readable.
+4. Run the device check (5.5) with `own = "to"`.
+5. For mail that arrives while the device is connected, if `sv` differs from the local digest, send the full state to `m`, at most once per member per minute.
+
+When a mailbox is loaded, `group` messages are applied in `created_at` order before other messages are read.
+
+### 9.7 Joining
+
+1. A member invites one of its contacts by sending `group_invite` through the contact's link, and records the invite in its vault with a new member id for the invitee and an expiry 7 days later. Clients MUST NOT invite if live members and pending invites would exceed the own server's `max_group_members`.
+2. The invitee accepts by creating a group link (new secret, `gen` 0), storing the group with its own card and the inviter, and sending `group_join` with its card through the contact's link. Clients MUST NOT accept if the members with the invitee would exceed the own server's `max_group_members`. To decline, the invitee sends `group_decline`.
+3. A device of the inviting account adds the card from `group_join` only if a pending invite exists for that contact and group, `card.id` is the invited member id, and `card.server` and `card.account` are the contact's. It removes the invite and sends the full state to all live members with the trigger `join:`.
+4. The invitee accepts its first state only from the inviter, signed by a device of the contact's account, with the inviter's card matching the contact's server and account and the own entry equal to its own card. It then sets `base`.
+
+If two devices of the invitee accept, the card in the first state is kept and the other group link is deleted.
+
+### 9.8 Token replacement
+
+When the number of gone entries increases, each live member's account computes its `gen`, sends `PUT /api/links/{id}/token` with `token(gen)`, updates its own card and sends the full state to all live members with the trigger `gen:`. The account's devices derive the same token, so the request is idempotent.
+
+### 9.9 Leaving and removal
+
+- To remove a member, a member marks it gone, sends the full state to all live members, and sends `group` with only the gone entry to the removed member.
+- To leave, a member marks itself gone, sends the full state to all other live members, deletes its group link and removes the group from its vault. Deleting the link deletes the attachments uploaded through it.
+- A device removes a group when its own entry is gone, or its group link is missing from `GET /api/links` or named in `link_revoked`.
+
+### 9.10 Vault
+
+The vault document (4.2) holds `groups`: `{ <group id>: { "u": <ms>, "g": <group> } | { "u": <ms>, "gone": true } }`.
+
+| group field | |
+|---|---|
+| `id`, `me` | group id, own member id |
+| `name`, `ttl`, `members` | state (9.2) |
+| `own` | `{link_id, secret, base, gen}` |
+| `invites` | `{ <contact id>: {member, expires} }` |
+| `inviter` | `{contact, member}`, until the first state |
+| `left` | `{ <member id>: <seconds> }`, the server time at which the account first applied each member's removal |
+| `created_at` | seconds |
+
+Between the account's devices, a group marked gone with a greater `u` is removed. Otherwise members and registers merge by `u` with gone entries staying gone, `own` is taken from the copy with the greater `u` with `gen` the maximum, pending invites are the union, `left` takes the earlier time per member, and `inviter` is kept only if both copies have it. Clients MUST keep unknown top-level fields of the vault document.
+
+## 10. Push notifications
 
 Clients register a WebPush endpoint (RFC 8030) created with the server's VAPID public key from `GET /api/config`, together with a P-256 public key and a 16-byte authentication secret (RFC 8291). Payloads:
 
@@ -374,7 +512,7 @@ Clients register a WebPush endpoint (RFC 8030) created with the server's VAPID p
 
 Clients MUST discard payloads that fail to decrypt.
 
-## 10. Server requirements
+## 11. Server requirements
 
 - Servers MUST store session tokens, link tokens and tickets only as hashes, and login keys only as a salted slow hash.
 - For an unknown username, `POST /api/auth/salt` MUST return a salt that is stable for that username and indistinguishable from a real one.
@@ -384,16 +522,17 @@ Clients MUST discard payloads that fail to decrypt.
 - Servers MUST deliver `mail` to all connections and push endpoints of the account, and `sent`, `vault`, `devices`, `link_removed` and `link_revoked` to all of the account's connections.
 - Removing or expiring a device MUST delete its sessions and close their connections.
 - Servers SHOULD encrypt stored vaults and wrapped keys with a secret held outside the database.
+- Through a group link, servers MUST refuse calls, `DELETE /api/link`, `GET /api/link/mail`, `POST /api/link/blobs` and `blobs` in `POST /api/link/mail`, and MUST accept the previous token for 24 hours after it is replaced.
 - Servers SHOULD rate limit as listed in [api.md](api.md#limits).
 
-## 11. Client storage
+## 12. Client storage
 
 - Identity and encryption private keys SHOULD be non-exportable or encrypted with a platform key store.
 - The data key, contacts and queued messages SHOULD be encrypted at rest with a device-bound key.
 - Decrypted messages SHOULD be held in memory only; decrypted attachments, if cached, MUST be deleted at the message's `expires_at`.
 - Signing out MUST delete the data key and SHOULD delete contacts, queued messages and known-device records.
 
-## 12. Test vectors
+## 13. Test vectors
 
 Argon2id, `m = 65536, t = 3, p = 1`, password `correct horse battery staple`, salt `AAECAwQFBgcICQoLDA0ODw`:
 
@@ -437,4 +576,25 @@ w   = yh9lYMmDB0ihEzkBytN2OU7SEf1Nl9yyccDaIig3iRXLixXnFr8dsoDan4bHYixUDCg8j9SxBY
 pt  = BwcHBwcHBwcHBwcHBwcHBw
 ```
 
-These vectors are checked by `web/test/crypto.test.ts`, `android/app/src/test/java/com/radcrow/caw/sealed/CryptoTest.kt` and `server/src/webpush.rs`.
+Group token, `secret = AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8`, `gen = 3`:
+
+```
+token = b2I-Q59lwHpXXMEbWcdxsbZsZI5UY58weNd-dFeHtD8
+```
+
+Derived id, the same secret, trigger `gen:3`, member id `6f1c2a4e-0b7d-4e8a-9c3f-2d5e8a1b7c90`:
+
+```
+id = ada5b3c3-c255-8e7d-838a-5680fe5a3fd6
+```
+
+Membership digest:
+
+```
+list = 0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f:2,7d9e1f20-3a4b-4c5d-8e6f-708192a3b4c5:x,e1d2c3b4-a5f6-4789-8a9b-0c1d2e3f4a5b:0
+sv   = zLiWXmP0hasivgj-C9CGPA
+```
+
+State merge cases are in `testdata/groups.json`.
+
+These vectors are checked by `web/test/crypto.test.ts`, `web/test/groups.test.ts`, `android/app/src/test/java/com/radcrow/caw/sealed/CryptoTest.kt`, `android/app/src/test/java/com/radcrow/caw/GroupsTest.kt` and `server/src/webpush.rs`.

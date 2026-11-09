@@ -515,6 +515,23 @@ tr.dim td { opacity: 0.55; }
 .notice p { flex: 1 1 14rem; }
 .code-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
 .caws-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.caws-wrap .caws { padding-bottom: 4.5rem; }
+.caws-wrap .caws { padding-bottom: 8.5rem; }
 .add-fab { position: absolute; right: 0.25rem; bottom: 0.75rem; height: 3.5rem; padding: 0 1.25rem 0 1rem; border-radius: 16px; box-shadow: var(--shadow-3); }
+.group-fab { position: absolute; right: 0.25rem; bottom: 5rem; height: 3rem; padding: 0 1rem 0 0.85rem; border-radius: 14px; box-shadow: var(--shadow-2, var(--shadow-3)); }
 .add-contact > * { flex-shrink: 0; }
+
+.new-group { width: min(92vw, 26rem); }
+.pick-list { list-style: none; margin: 0 -0.5rem; padding: 0; max-height: 40vh; overflow-y: auto; }
+.new-group .contact-search { margin: 0; }
+.pick-row { display: flex; align-items: center; gap: 0.75rem; width: 100%; padding: 0.45rem 0.5rem; border: 0; border-radius: 12px; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.pick-row:hover:not(:disabled) { background: var(--surface-2, rgba(0, 0, 0, 0.04)); }
+.pick-row:disabled { opacity: 0.45; cursor: default; }
+.pick-row > .icon { color: var(--muted); }
+.pick-row.on > .icon { color: var(--primary); }
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.5rem 0.3rem 0.75rem; border: 0; border-radius: 999px; background: var(--primary-container, #dbe3ff); color: var(--on-primary-container, var(--text)); cursor: pointer; }
+.group-pop .members { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; max-height: 14rem; overflow-y: auto; }
+.group-pop .members li { display: flex; align-items: center; gap: 0.5rem; }
+.group-pop .members button { width: auto; flex: none; padding: 0.35rem 0.6rem; }
+.msg .sender { margin: 0 0.75rem 0.15rem; }
+.landing-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }

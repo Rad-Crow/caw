@@ -181,10 +181,18 @@ export async function encryptFile(data: Bytes) {
 
 // uploads to the recipient's server via the contact link
 export function upload(to: Remote, body: Bytes, onProgress: (p: number) => void): Promise<string> {
+  return post(`${to.server}/api/link/blobs`, linkAuth(to), body, onProgress)
+}
+
+export function uploadOwn(link: string, body: Bytes, onProgress: (p: number) => void): Promise<string> {
+  return post(`/api/links/${link}/blobs`, null, body, onProgress)
+}
+
+function post(url: string, auth: string | null, body: Bytes, onProgress: (p: number) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest()
-    x.open('POST', `${to.server}/api/link/blobs`)
-    x.setRequestHeader('authorization', linkAuth(to))
+    x.open('POST', url)
+    if (auth) x.setRequestHeader('authorization', auth)
     x.setRequestHeader('content-type', 'application/octet-stream')
     x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total)
     x.onload = () => {
@@ -204,15 +212,18 @@ export function upload(to: Remote, body: Bytes, onProgress: (p: number) => void)
   })
 }
 
+// keyed by where the file is and its key, so a message cannot borrow another sender's file
 const cache = new Map<string, Promise<string>>()
+const cacheKey = (blob: string, key: string, from?: Remote) => `${from?.server ?? ''}|${blob}|${key}`
 
-export function seedMedia(blob: string, url: string) {
-  cache.set(blob, Promise.resolve(url))
+export function seedMedia(blob: string, key: string, url: string, from?: Remote) {
+  cache.set(cacheKey(blob, key, from), Promise.resolve(url))
 }
 
-// received media is on the home server; sent media is on the recipient's server, fetched via the contact link
+// received media is on the home server; sent media and a group member's media are on another server, fetched through a link
 export function loadMedia(m: MediaPlain, sentTo?: Remote): Promise<string> {
-  let hit = cache.get(m.blob)
+  const id = cacheKey(m.blob, m.key, sentTo)
+  let hit = cache.get(id)
   if (!hit) {
     hit = (async () => {
       const res = sentTo
@@ -223,16 +234,18 @@ export function loadMedia(m: MediaPlain, sentTo?: Remote): Promise<string> {
       const pt = await aesGcm('decrypt', unb64(m.key), body.slice(0, 12), BLOB_AAD, body.slice(12))
       return URL.createObjectURL(new Blob([pt], { type: m.mime }))
     })()
-    hit.catch(() => cache.delete(m.blob))
-    cache.set(m.blob, hit)
+    hit.catch(() => cache.delete(id))
+    cache.set(id, hit)
   }
   return hit
 }
 
 export function dropMedia(blob: string) {
-  const hit = cache.get(blob)
-  cache.delete(blob)
-  hit?.then((u) => URL.revokeObjectURL(u)).catch(() => {})
+  for (const [id, hit] of cache) {
+    if (id.split('|')[1] !== blob) continue
+    cache.delete(id)
+    hit.then((u) => URL.revokeObjectURL(u)).catch(() => {})
+  }
 }
 
 export function fmtDur(s: number) {

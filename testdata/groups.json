@@ -1,0 +1,1991 @@
+{
+ "token": {
+  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "gen": 3,
+  "token": "b2I-Q59lwHpXXMEbWcdxsbZsZI5UY58weNd-dFeHtD8"
+ },
+ "id": {
+  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "trigger": "gen:3",
+  "member": "6f1c2a4e-0b7d-4e8a-9c3f-2d5e8a1b7c90",
+  "id": "ada5b3c3-c255-8e7d-838a-5680fe5a3fd6"
+ },
+ "digest": {
+  "members": {
+   "e1d2c3b4-a5f6-4789-8a9b-0c1d2e3f4a5b": {
+    "u": 1,
+    "c": {
+     "id": "e1d2c3b4-a5f6-4789-8a9b-0c1d2e3f4a5b",
+     "server": "https://two.example",
+     "account": "1",
+     "name": "Carol",
+     "link_id": "1c000000-0000-4000-8000-000000000003",
+     "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+     "gen": 0
+    }
+   },
+   "0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f": {
+    "u": 1,
+    "c": {
+     "id": "0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f",
+     "server": "https://one.example",
+     "account": "1",
+     "name": "Alice",
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "gen": 2
+    }
+   },
+   "7d9e1f20-3a4b-4c5d-8e6f-708192a3b4c5": {
+    "u": 1,
+    "gone": true
+   }
+  },
+  "list": "0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f:2,7d9e1f20-3a4b-4c5d-8e6f-708192a3b4c5:x,e1d2c3b4-a5f6-4789-8a9b-0c1d2e3f4a5b:0",
+  "sv": "zLiWXmP0hasivgj-C9CGPA"
+ },
+ "apply": [
+  {
+   "name": "a member adds a member",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     },
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": "https://two.example",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      },
+      "c0000000-0000-4000-8000-00000000000c": {
+       "u": 2000,
+       "c": {
+        "id": "c0000000-0000-4000-8000-00000000000c",
+        "server": "https://two.example",
+        "account": "1",
+        "name": "Carol",
+        "link_id": "1c000000-0000-4000-8000-000000000003",
+        "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [
+     "c0000000-0000-4000-8000-00000000000c"
+    ],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a state from a non-member is ignored",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     },
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": "https://two.example",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "c0000000-0000-4000-8000-00000000000c",
+   "now": 1800000000000,
+   "result": null
+  },
+  {
+   "name": "the inviter's first state",
+   "local": {
+    "name": {
+     "v": "",
+     "u": 0
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 0
+    },
+    "members": {
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": "https://two.example",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 3600,
+     "u": 1500
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     },
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": "https://two.example",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "bootstrap": true,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 3600,
+      "u": 1500
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      },
+      "c0000000-0000-4000-8000-00000000000c": {
+       "u": 2000,
+       "c": {
+        "id": "c0000000-0000-4000-8000-00000000000c",
+        "server": "https://two.example",
+        "account": "1",
+        "name": "Carol",
+        "link_id": "1c000000-0000-4000-8000-000000000003",
+        "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [
+     "a0000000-0000-4000-8000-00000000000a",
+     "b0000000-0000-4000-8000-00000000000b"
+    ],
+    "gone": [],
+    "renamed": true,
+    "timer": true
+   }
+  },
+  {
+   "name": "a removal is permanent",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1500,
+      "gone": true
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 3000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1500,
+       "gone": true
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a member removes a member",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 2000,
+      "gone": true
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 2000,
+       "gone": true
+      }
+     }
+    },
+    "added": [],
+    "gone": [
+     "b0000000-0000-4000-8000-00000000000b"
+    ],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "another member cannot change a card",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 2000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+       "gen": 1
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a member replaces its own token",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 2000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+       "gen": 1
+      }
+     }
+    }
+   },
+   "sender": "b0000000-0000-4000-8000-00000000000b",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 2000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+        "gen": 1
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a card cannot change its link",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 2000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1e000000-0000-4000-8000-000000000005",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 1
+      }
+     }
+    }
+   },
+   "sender": "b0000000-0000-4000-8000-00000000000b",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a newer name wins",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "name": {
+     "v": "Family",
+     "u": 2000
+    }
+   },
+   "sender": "b0000000-0000-4000-8000-00000000000b",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Family",
+      "u": 2000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": true,
+    "timer": false
+   }
+  },
+  {
+   "name": "an equal stamp keeps the greater name",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "name": {
+     "v": "Zoo",
+     "u": 1000
+    }
+   },
+   "sender": "b0000000-0000-4000-8000-00000000000b",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Zoo",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": true,
+    "timer": false
+   }
+  },
+  {
+   "name": "a stamp more than a day ahead is ignored",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "ttl": {
+     "v": 3600,
+     "u": 1800086400001
+    }
+   },
+   "sender": "b0000000-0000-4000-8000-00000000000b",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "of two entries for one account the earlier stays",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "d0000000-0000-4000-8000-00000000000d": {
+      "u": 500,
+      "c": {
+       "id": "d0000000-0000-4000-8000-00000000000d",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1d000000-0000-4000-8000-000000000004",
+       "token": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "gone": true
+      },
+      "d0000000-0000-4000-8000-00000000000d": {
+       "u": 500,
+       "c": {
+        "id": "d0000000-0000-4000-8000-00000000000d",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1d000000-0000-4000-8000-000000000004",
+        "token": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [
+     "d0000000-0000-4000-8000-00000000000d"
+    ],
+    "gone": [
+     "b0000000-0000-4000-8000-00000000000b"
+    ],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a later entry for an existing account is dropped",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "d0000000-0000-4000-8000-00000000000d": {
+      "u": 5000,
+      "c": {
+       "id": "d0000000-0000-4000-8000-00000000000d",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1d000000-0000-4000-8000-000000000004",
+       "token": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      },
+      "d0000000-0000-4000-8000-00000000000d": {
+       "u": 5000,
+       "gone": true
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "a malformed card is ignored",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "d0000000-0000-4000-8000-00000000000d": {
+      "u": 2000,
+      "c": {
+       "id": "d0000000-0000-4000-8000-00000000000d",
+       "server": "https://two.example",
+       "account": "5",
+       "name": "Dave",
+       "link_id": "1d000000-0000-4000-8000-000000000004",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  }
+ ],
+ "merge": [
+  {
+   "name": "members merge and removals stay",
+   "a": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1
+   },
+   "b": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Family",
+     "u": 3000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1200,
+      "gone": true
+     },
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": "https://two.example",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1
+   },
+   "now": 1800000000000,
+   "result": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Family",
+     "u": 3000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1200,
+      "gone": true
+     },
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": "https://two.example",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1
+   }
+  },
+  {
+   "name": "the greater generation, the later invite expiry, no inviter once a copy has none",
+   "a": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {
+     "k1": {
+      "member": "c0000000-0000-4000-8000-00000000000c",
+      "expires": 1800000100
+     },
+     "k2": {
+      "member": "d0000000-0000-4000-8000-00000000000d",
+      "expires": 1799999999
+     }
+    },
+    "created_at": 1,
+    "inviter": {
+     "contact": "k9",
+     "member": "b0000000-0000-4000-8000-00000000000b"
+    }
+   },
+   "b": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 3000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+       "gen": 1
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 1
+    },
+    "invites": {
+     "k1": {
+      "member": "c0000000-0000-4000-8000-00000000000c",
+      "expires": 1800000050
+     },
+     "k3": {
+      "member": "d0000000-0000-4000-8000-00000000000d",
+      "expires": 1800000010
+     }
+    },
+    "created_at": 1
+   },
+   "now": 1800000000000,
+   "result": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 3000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+       "gen": 1
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 1
+    },
+    "invites": {
+     "k1": {
+      "member": "c0000000-0000-4000-8000-00000000000c",
+      "expires": 1800000100
+     },
+     "k3": {
+      "member": "d0000000-0000-4000-8000-00000000000d",
+      "expires": 1800000010
+     }
+    },
+    "created_at": 1
+   }
+  },
+  {
+   "name": "the own link follows the own card",
+   "a": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1
+   },
+   "b": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 2000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1e000000-0000-4000-8000-000000000005",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1e000000-0000-4000-8000-000000000005",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1
+   },
+   "now": 1800000000000,
+   "result": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 2000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1e000000-0000-4000-8000-000000000005",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1e000000-0000-4000-8000-000000000005",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1
+   }
+  },
+  {
+   "name": "the earliest record of a member leaving wins",
+   "a": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1,
+    "left": {
+     "b0000000-0000-4000-8000-00000000000b": 1800000100,
+     "c0000000-0000-4000-8000-00000000000c": 1800000300
+    }
+   },
+   "b": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1,
+    "left": {
+     "b0000000-0000-4000-8000-00000000000b": 1800000050
+    }
+   },
+   "now": 1800000000000,
+   "result": {
+    "id": "9a000000-0000-4000-8000-000000000009",
+    "me": "a0000000-0000-4000-8000-00000000000a",
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    },
+    "own": {
+     "link_id": "1a000000-0000-4000-8000-000000000001",
+     "secret": "c2VjcmV0",
+     "base": 0,
+     "gen": 0
+    },
+    "invites": {},
+    "created_at": 1,
+    "left": {
+     "b0000000-0000-4000-8000-00000000000b": 1800000050,
+     "c0000000-0000-4000-8000-00000000000c": 1800000300
+    }
+   }
+  }
+ ]
+}

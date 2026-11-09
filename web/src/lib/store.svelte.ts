@@ -2,7 +2,7 @@ import wordsRaw from '../../../protocol/words.txt?raw'
 import { api, ApiError, fmtTtl, type Me, type Peer } from './api'
 import { calls, type CallEnd } from './call.svelte'
 import { decodeCode, encodeCode, Gone, hostOf, linkReq, Unreachable, wsBase, type Contact, type Remote } from './contacts'
-import { b64, callSigBytes, pairingWords, random, sign, unb64, verify, type Bytes } from './crypto'
+import { b64, callSigBytes, groupMessageId, groupToken, membershipDigest, pairingWords, random, sign, unb64, verify, type Bytes } from './crypto'
 import {
   certOk,
   ensureDevice,
@@ -11,21 +11,25 @@ import {
   openHello,
   openLocal,
   openMail,
+  openSealed,
   saveDataKey,
+  sealCopy,
   sealLocal,
   sealMail,
   signedBy,
   unsupported,
   type Card,
   type Device,
+  type GroupState,
   type Mail,
   type OwnDevice,
   type Plain,
   type PublicDevice,
 } from './device'
+import { applyState, card as cardOf, digestList, goneCount, isLive, isUuid, liveCards, mergeGroup, ownGen, validCard, type Card as GroupCard, type Group } from './groups'
 import { derive, newKdf, unwrapWith, wrapKey, type Kdf } from './kdf'
 import { openVault, sealVault, synced, type VaultDoc, type VaultResp } from './vault'
-import { dropMedia, encryptFile, prepare, seedMedia, TooLarge, upload, type MediaPlain, type Prepared } from './media'
+import { dropMedia, encryptFile, prepare, seedMedia, TooLarge, upload, uploadOwn, type MediaPlain, type Prepared } from './media'
 import { privateMessages } from './prefs'
 import { Socket } from './socket'
 import { tones } from './tones'
@@ -46,9 +50,22 @@ export interface Message {
   plain: Plain | null
   // queued in the outbox, not yet delivered
   pending?: boolean
+  sender?: string
 }
 
-type Outgoing = { id: string; to: number; plain: Plain; blobs?: string[]; at: number; ttl: number }
+// held copies wait for the member's card to change
+type Outgoing = {
+  id: string
+  to: number
+  plain: Plain
+  blobs?: string[]
+  at: number
+  ttl: number
+  group?: string
+  copies?: Record<string, string>
+  cards?: Record<string, GroupCard>
+  held?: Record<string, string>
+}
 
 export interface CawEvent {
   at: number
@@ -59,6 +76,18 @@ export interface Prompt {
   link_id: string
   card: Card
   words: string[]
+}
+
+export type LocalGroup = Group & { num: number; u: number; names?: Record<string, string>; signers?: Record<string, Record<string, string>> }
+
+export interface GroupPrompt {
+  contact: string
+  from: string
+  g: string
+  name: string
+  members: string[]
+  inviter: string
+  member: string
 }
 
 // derived from a typed password; held only until the vault is unlocked
@@ -86,6 +115,7 @@ interface Config {
   message_ttl_min: number
   message_ttl_max: number
   max_upload_mb: number
+  max_group_members: number
 }
 
 export type Attachment = { status: 'preparing' | 'ready' | 'sending'; progress: number; prepared?: Prepared }
@@ -107,7 +137,26 @@ function writeLocal(key: string, v: unknown) {
   }
 }
 
-const isControl = (p: Plain) => p.t === 'hello' || p.t === 'accept' || p.t === 'decline' || p.t === 'timer' || p.t === 'bye'
+const isControl = (p: Plain) =>
+  p.t === 'hello' || p.t === 'accept' || p.t === 'decline' || p.t === 'timer' || p.t === 'bye' || p.t === 'group_invite' || p.t === 'group_join' || p.t === 'group_decline'
+
+// never accepted through a contact link
+const isGroupContent = (p: Plain) => p.t === 'group' || ((p.t === 'text' || p.t === 'media') && p.g !== undefined)
+
+const remote = (c: GroupCard): Remote => ({ server: c.server, out: { link_id: c.link_id, token: c.token } })
+
+// key order does not matter when comparing copies
+const canon = (v: unknown): string =>
+  JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x))
+
+function syncedGroup(g: LocalGroup): Group {
+  const s: Partial<LocalGroup> = $state.snapshot(g) as LocalGroup
+  delete s.num
+  delete s.u
+  delete s.names
+  delete s.signers
+  return s as Group
+}
 
 export function plainText(p: Plain): string {
   if (p.t === 'media') {
@@ -135,8 +184,17 @@ export function callText(n: Message, me: number | undefined): string {
 class Store {
   ready = $state(false)
   me = $state<Me | null>(null)
-  config = $state<Config>({ server_name: 'Caw', registration_open: false, message_ttl_default: 86400, message_ttl_min: 300, message_ttl_max: 604800, max_upload_mb: 25 })
+  config = $state<Config>({
+    server_name: 'Caw',
+    registration_open: false,
+    message_ttl_default: 86400,
+    message_ttl_min: 300,
+    message_ttl_max: 604800,
+    max_upload_mb: 25,
+    max_group_members: 10,
+  })
   contacts = $state<Contact[]>([])
+  groups = $state<LocalGroup[]>([])
   messages = $state<Record<number, Message[]>>({})
   events = $state<Record<number, CawEvent[]>>({})
   opened = $state<number[]>([])
@@ -148,6 +206,7 @@ class Store {
   seen = $state<Record<number, number>>({})
   // pairing requests from redeemed codes
   prompts = $state<Prompt[]>([])
+  groupPrompts = $state<GroupPrompt[]>([])
   // contact whose server is unreachable; the user chooses to keep trying or remove
   unreachable = $state<number | null>(null)
   composeFor = $state<number | null>(null)
@@ -190,6 +249,14 @@ class Store {
   private contactsReady: Promise<void> = Promise.resolve()
   private markContactsReady: () => void = () => {}
   private devicesAgain = false
+  private goneGroups: Record<string, number> = {}
+  // the account's group links, known before the vault names their groups
+  private groupLinks = new Set<string>()
+  // vault fields this version does not use, kept when writing
+  private vaultExtra: Record<string, unknown> = {}
+  private memberLists = new Map<string, PeerDevices>()
+  private synced = new Map<string, number>()
+  private mailQueue: Promise<void> = Promise.resolve()
 
   constructor() {
     calls.bind({
@@ -254,10 +321,11 @@ class Store {
     const q = query.trim().toLowerCase()
     const rank = (id: number) =>
       this.messages[id]?.at(-1)?.created_at ?? (this.opened.includes(id) || id === this.selected ? Number.MAX_SAFE_INTEGER : -1)
-    return this.contacts
+    const contacts = this.contacts
       .filter((c) => !q || this.userName(c.num).toLowerCase().includes(q) || c.name.toLowerCase().includes(q) || hostOf(c.server).includes(q))
       .map((c) => c.num)
-      .sort((a, b) => rank(b) - rank(a) || this.userName(a).localeCompare(this.userName(b)))
+    const groups = this.groups.filter((g) => !q || g.name.v.toLowerCase().includes(q)).map((g) => g.num)
+    return [...contacts, ...groups].sort((a, b) => rank(b) - rank(a) || this.userName(a).localeCompare(this.userName(b)))
   }
 
   isOpen(id: number): boolean {
@@ -291,6 +359,14 @@ class Store {
   }
 
   preview(id: number): { text: string; missed: boolean } {
+    const g = this.group(id)
+    if (g) {
+      if (g.inviter) return { text: 'Waiting to be added', missed: false }
+      const n = this.messages[id]?.at(-1)
+      if (!n) return { text: this.memberCount(id), missed: false }
+      if (!n.plain) return { text: 'Encrypted message', missed: false }
+      return { text: `${n.from_user === this.me?.id ? 'You' : this.memberName(id, n.sender)}: ${plainText(n.plain)}`, missed: false }
+    }
     const c = this.contact(id)
     if (c?.status === 'pending') return { text: 'Waiting to accept', missed: false }
     const n = this.messages[id]?.at(-1)
@@ -301,7 +377,7 @@ class Store {
   }
 
   timerFor(id: number): number {
-    return this.contact(id)?.ttl ?? this.config.message_ttl_default
+    return this.group(id)?.ttl.v ?? this.contact(id)?.ttl ?? this.config.message_ttl_default
   }
 
   navigate(path: string) {
@@ -422,6 +498,8 @@ class Store {
   }
 
   userName(id: number): string {
+    const g = this.group(id)
+    if (g) return g.name.v || 'Group'
     const c = this.contact(id)
     return c ? (c.alias ?? c.name) : 'Unknown'
   }
@@ -506,6 +584,13 @@ class Store {
     this.socket = null
     this.device = null
     this.contacts = []
+    this.groups = []
+    this.groupPrompts = []
+    this.goneGroups = {}
+    this.groupLinks.clear()
+    this.vaultExtra = {}
+    this.memberLists.clear()
+    this.synced.clear()
     this.messages = {}
     this.events = {}
     this.opened = []
@@ -605,7 +690,10 @@ class Store {
     const cutoff = this.stamp() - 180 * DAY * 1000
     for (const [id, u] of Object.entries(this.gone)) if (u > cutoff) contacts[id] = { u, gone: true }
     for (const c of this.contacts) contacts[c.id] = { u: c.updated_at, c: synced($state.snapshot(c) as Contact) }
-    return { v: 1, contacts }
+    const groups: NonNullable<VaultDoc['groups']> = {}
+    for (const [id, u] of Object.entries(this.goneGroups)) if (u > cutoff) groups[id] = { u, gone: true }
+    for (const g of this.groups) groups[g.id] = { u: g.u, g: syncedGroup(g) }
+    return { ...this.vaultExtra, v: 1, contacts, groups }
   }
 
   // newer entry wins; true when local state has entries the copy lacks
@@ -629,8 +717,44 @@ class Store {
         this.prompts = this.prompts.filter((p) => p.link_id !== e.c!.in)
       }
     }
+    const { v: _v, contacts: _c, groups, ...extra } = doc
+    this.vaultExtra = extra
+    let added = false
+    for (const [id, e] of Object.entries(groups ?? {})) {
+      const i = this.groups.findIndex((g) => g.id === id)
+      const local = i >= 0 ? this.groups[i] : undefined
+      if (e.gone || !e.g) {
+        if (e.u <= (this.goneGroups[id] ?? -1)) continue
+        this.goneGroups[id] = e.u
+        if (local && e.u > local.u) this.dropGroup(local)
+        changed = true
+        continue
+      }
+      if ((this.goneGroups[id] ?? -1) >= e.u) continue
+      if (!local) {
+        delete this.goneGroups[id]
+        this.groups.push({ ...e.g, num: this.nextNum(), u: e.u })
+        this.groupPrompts = this.groupPrompts.filter((p) => p.g !== id)
+        changed = added = true
+        continue
+      }
+      const mine = syncedGroup(local)
+      const merged = mergeGroup(mine, e.g, this.stamp())
+      if (e.u > local.u) local.u = e.u
+      if (canon(merged) === canon(mine)) continue
+      const old = local.own.link_id
+      Object.assign(local, merged)
+      if (!merged.inviter) delete local.inviter
+      if (old !== local.own.link_id) api.del(`/api/links/${old}`).catch(() => {})
+      changed = true
+    }
     if (changed) this.saveContacts()
-    return Object.entries(this.doc().contacts).some(([id, e]) => (doc.contacts[id]?.u ?? -1) < e.u)
+    if (added) this.loadMail().catch(() => {})
+    const out = this.doc()
+    return (
+      Object.entries(out.contacts).some(([id, e]) => (doc.contacts[id]?.u ?? -1) < e.u) ||
+      Object.entries(out.groups ?? {}).some(([id, e]) => canon(groups?.[id]) !== canon(e))
+    )
   }
 
   private async pullVault() {
@@ -686,14 +810,14 @@ class Store {
   }
 
   private nextNum(): number {
-    return Math.max(1_000_000, ...this.contacts.map((x) => x.num)) + 1
+    return Math.max(1_000_000, ...this.contacts.map((x) => x.num), ...this.groups.map((x) => x.num)) + 1
   }
 
   // --- local contact storage
 
   private saveContacts() {
     const key = `caw.contacts.${this.me!.id}`
-    const v = { contacts: $state.snapshot(this.contacts), gone: { ...this.gone } }
+    const v = { contacts: $state.snapshot(this.contacts), gone: { ...this.gone }, groups: $state.snapshot(this.groups), goneGroups: { ...this.goneGroups } }
     this.contactsSave = this.contactsSave.then(async () => {
       try {
         localStorage.setItem(key, await sealLocal(v))
@@ -710,17 +834,25 @@ class Store {
     } catch {
       return
     }
-    const v = stored ? await openLocal<{ contacts: Contact[]; gone: Record<string, number> }>(stored) : null
+    const v = stored
+      ? await openLocal<{ contacts: Contact[]; gone: Record<string, number>; groups?: LocalGroup[]; goneGroups?: Record<string, number> }>(stored)
+      : null
     this.contacts = Array.isArray(v?.contacts) ? v.contacts : []
     this.gone = v?.gone ?? {}
+    this.groups = Array.isArray(v?.groups) ? v.groups : []
+    this.goneGroups = v?.goneGroups ?? {}
   }
 
   // drops contacts whose links were removed while offline, by the contact or another of the account's devices
   private async reconcile() {
-    const links = await api.get<{ id: string }[]>('/api/links')
+    const links = await api.get<{ id: string; kind?: string }[]>('/api/links')
     const have = new Set(links.map((l) => l.id))
+    this.groupLinks = new Set(links.filter((l) => l.kind === 'group').map((l) => l.id))
     for (const c of [...this.contacts]) {
       if (!have.has(c.in)) this.forget(c, `${this.userName(c.num)} is no longer a contact.`)
+    }
+    for (const g of [...this.groups]) {
+      if (!have.has(g.own.link_id)) this.forgetGroup(g, `You are no longer in ${g.name.v}.`)
     }
   }
 
@@ -829,8 +961,8 @@ class Store {
     this.secureNow = true
   }
 
-  private async ownSealTo(): Promise<PublicDevice[]> {
-    if (Date.now() - this.ownAt > 60_000) await this.refreshDevices()
+  private async ownSealTo(fresh = false): Promise<PublicDevice[]> {
+    if (fresh || Date.now() - this.ownAt > 60_000) await this.refreshDevices()
     const ok = await Promise.all(this.ownDevices.map(async (d) => ((await certOk(d)) ? (d as PublicDevice) : null)))
     return ok.filter((d): d is PublicDevice => !!d)
   }
@@ -840,14 +972,14 @@ class Store {
   }
 
   // every stanza for this account must target a device the home server lists (or listed recently), with a known key
-  private async checkDevices(c: Contact, m: Mail, ours: 'to' | 'from') {
+  private async checkDevices(num: number, m: Mail, ours: 'to' | 'from') {
     if (m.created_at < this.enrolledAt) return
     const odd = () => m.keys.filter((k) => k.o === ours && !this.known[k.d]?.keys.includes(k.k))
     if (!odd().length) return
     await this.refreshDevices().catch(() => {})
-    if (!odd().length || this.deviceAlerts[c.num]) return
-    this.deviceAlerts[c.num] = true
-    this.notify('Check your devices', `A message with ${this.userName(c.num)} was also encrypted for a device that isn't yours.`)
+    if (!odd().length || this.deviceAlerts[num]) return
+    this.deviceAlerts[num] = true
+    this.notify('Check your devices', `A message ${this.isGroup(num) ? 'in' : 'with'} ${this.userName(num)} was also encrypted for a device that isn't yours.`)
   }
 
   dismissAlert(num: number) {
@@ -977,31 +1109,54 @@ class Store {
 
   private async openFrom(c: Contact, m: Mail): Promise<Plain | null> {
     const plain = await openMail(this.device!, m, await this.signersFor(c, m.from_device))
-    if (plain) this.checkDevices(c, m, 'to')
+    if (plain) this.checkDevices(c.num, m, 'to')
     return plain
   }
 
-  private async loadMail() {
+  private loadMail(): Promise<void> {
+    return this.inMailQueue(() => this.readMail())
+  }
+
+  private takeMail(m: Mail): Promise<void> {
+    return this.inMailQueue(() => this.readOne(m))
+  }
+
+  // a full reload and live mail never overlap
+  private inMailQueue(f: () => Promise<void>): Promise<void> {
+    const run = this.mailQueue.then(f)
+    this.mailQueue = run.catch(() => {})
+    return run
+  }
+
+  private async readMail() {
     const dev = this.device
     if (!dev) return
     const res = await api.get<{ now: number; mail: Mail[] }>('/api/mail')
     this.skew = res.now - Math.floor(Date.now() / 1000)
     const grouped: Record<number, Message[]> = {}
+    const byGroup = new Map<string, Mail[]>()
     for (const m of res.mail) {
       const c = this.contacts.find((x) => x.in === m.link_id)
       if (!c) {
-        await this.maybeHello(m)
+        const g = this.groups.find((x) => x.own.link_id === m.link_id)
+        if (g) byGroup.set(g.id, [...(byGroup.get(g.id) ?? []), m])
+        else if (!this.groupLinks.has(m.link_id)) await this.maybeHello(m)
         continue
       }
       const plain = await this.openFrom(c, m)
+      if (plain && isGroupContent(plain)) continue
       if (plain && isControl(plain)) {
         this.control(c, plain, m, false)
         continue
       }
       ;(grouped[c.num] ??= []).push({ id: m.id, from_user: c.num, to_user: this.me!.id, created_at: m.created_at, expires_at: m.expires_at, plain })
     }
-    for (const [num, list] of Object.entries(grouped)) this.messages[Number(num)] = list
-    for (const num of Object.keys(this.messages)) if (!grouped[Number(num)]) delete this.messages[Number(num)]
+    for (const [id, list] of byGroup) {
+      const g = this.groups.find((x) => x.id === id)
+      if (g) grouped[g.num] = await this.readGroup(g, list)
+    }
+    for (const [num, list] of Object.entries(grouped)) if (list.length) this.messages[Number(num)] = list
+    for (const num of Object.keys(this.messages)) if (!grouped[Number(num)]?.length) delete this.messages[Number(num)]
     await Promise.all(this.contacts.filter((c) => c.status === 'active').map((c) => this.loadSent(c)))
   }
 
@@ -1020,7 +1175,7 @@ class Store {
     for (const m of sent) {
       if (!this.known[m.from_device]) await this.refreshDevices().catch(() => {})
       const plain = await openMail(dev, m, this.ownSigners())
-      if (plain) this.checkDevices(c, m, 'from')
+      if (plain) this.checkDevices(c.num, m, 'from')
       if (plain && isControl(plain)) continue
       mine.push({ id: m.id, from_user: this.me!.id, to_user: c.num, created_at: m.created_at, expires_at: m.expires_at, plain })
     }
@@ -1031,13 +1186,19 @@ class Store {
     else delete this.messages[c.num]
   }
 
-  private async takeMail(m: Mail) {
+  private async readOne(m: Mail) {
     const dev = this.device
     if (!dev) return
     const c = this.contacts.find((x) => x.in === m.link_id)
-    if (!c) return this.maybeHello(m)
+    if (!c) {
+      const g = this.groups.find((x) => x.own.link_id === m.link_id)
+      if (g) return this.takeGroupMail(g, m)
+      if (this.groupLinks.has(m.link_id)) return
+      return this.maybeHello(m)
+    }
     if (this.messages[c.num]?.some((n) => n.id === m.id)) return
     const plain = await this.openFrom(c, m)
+    if (plain && isGroupContent(plain)) return
     if (plain && isControl(plain)) return this.control(c, plain, m, true)
     const msg: Message = { id: m.id, from_user: c.num, to_user: this.me!.id, created_at: m.created_at, expires_at: m.expires_at, plain }
     this.messages[c.num] = [...(this.messages[c.num] ?? []), msg].sort((a, b) => a.created_at - b.created_at)
@@ -1071,6 +1232,13 @@ class Store {
         this.touch(c, at)
         this.addEvent(c.num, `${name} set messages to expire after ${fmtTtl(p.ttl)}`)
         return
+      case 'group_invite':
+        return this.groupInvite(c, p, m)
+      case 'group_join':
+        this.groupJoin(c, p, m).catch((e) => console.warn('group join', e))
+        return
+      case 'group_decline':
+        return this.groupDecline(c, p)
     }
   }
 
@@ -1111,8 +1279,9 @@ class Store {
     writeLocal(`caw.seen.${this.me!.id}`, this.seen)
   }
 
+  // fractional seconds, so an event sorts after messages that arrived earlier in the same second
   private addEvent(id: number, text: string) {
-    this.events[id] = [...(this.events[id] ?? []), { at: this.serverNow(), text }]
+    this.events[id] = [...(this.events[id] ?? []), { at: this.stamp() / 1000, text }]
   }
 
   // contact devices as their server reports them, limited to those whose identity key signed their encryption key
@@ -1149,13 +1318,15 @@ class Store {
     }
   }
 
-  private async postControl(c: Contact, plain: Plain) {
-    await this.deliver(c, this.config.message_ttl_default, plain)
+  private async postControl(c: Contact, plain: Plain, ttl = this.config.message_ttl_default) {
+    await this.deliver(c, ttl, plain)
   }
 
   // network errors queue the message in the outbox; a gone contact is removed; anything else throws
   async send(to: number, plain: Plain, blobs?: string[]) {
     if (!this.device) throw new Error(this.deviceError ?? 'This device is not set up yet.')
+    const g = this.group(to)
+    if (g) return this.sendGroup(g, plain, blobs)
     const c = this.contact(to)
     if (!c || c.status !== 'active') throw new Error('This contact is not available.')
     const o: Outgoing = { id: crypto.randomUUID(), to, plain, blobs, at: this.serverNow(), ttl: this.timerFor(to) }
@@ -1183,16 +1354,16 @@ class Store {
     const c = this.contact(o.to)!
     const stored = await this.deliver(c, o.ttl, o.plain, o.id, o.blobs)
     if (stored) {
-      this.addMine(c, stored.id, stored.created_at, stored.expires_at, o.plain)
+      this.addMine(c.num, stored.id, stored.created_at, stored.expires_at, o.plain)
       api.post('/api/sent', { contact: c.id }).catch(() => {})
     }
     this.reachable(c)
   }
 
-  private addMine(c: Contact, id: string, created: number, expires: number, plain: Plain) {
-    if (this.messages[c.num]?.some((n) => n.id === id)) return
-    const msg: Message = { id, from_user: this.me!.id, to_user: c.num, created_at: created, expires_at: expires, plain }
-    this.messages[c.num] = [...(this.messages[c.num] ?? []), msg].sort((a, b) => a.created_at - b.created_at)
+  private addMine(num: number, id: string, created: number, expires: number, plain: Plain) {
+    if (this.messages[num]?.some((n) => n.id === id)) return
+    const msg: Message = { id, from_user: this.me!.id, to_user: num, created_at: created, expires_at: expires, plain }
+    this.messages[num] = [...(this.messages[num] ?? []), msg].sort((a, b) => a.created_at - b.created_at)
   }
 
   private reachable(c: Contact) {
@@ -1248,7 +1419,7 @@ class Store {
     }
     const list = stored ? ((await openLocal<Outgoing[]>(stored)) ?? []) : []
     const known = new Set(this.outbox.map((o) => o.id))
-    this.outbox.push(...list.filter((o) => !known.has(o.id) && this.contact(o.to)))
+    this.outbox.push(...list.filter((o) => !known.has(o.id) && (o.copies || this.contact(o.to))))
     this.dropStale()
     this.flush()
   }
@@ -1260,7 +1431,8 @@ class Store {
     if (!stale.length) return
     this.outbox = this.outbox.filter((o) => o.at + o.ttl > t)
     this.saveOutbox()
-    this.flash(stale.length === 1 ? 'An unsent message expired.' : `${stale.length} unsent messages expired.`)
+    const shown = stale.filter((o) => o.plain.t !== 'group').length
+    if (shown) this.flash(shown === 1 ? 'An unsent message expired.' : `${shown} unsent messages expired.`)
   }
 
   // in order, one server at a time, each only after its backoff elapses
@@ -1270,6 +1442,15 @@ class Store {
     const skip = new Set<string>()
     try {
       for (const o of [...this.outbox]) {
+        if (o.copies) {
+          try {
+            if (!(await this.postGroup(o, skip))) continue
+          } catch (e) {
+            this.flash(`Message not sent: ${e instanceof Error ? e.message : e}`)
+          }
+          this.outbox = this.outbox.filter((x) => x.id !== o.id)
+          continue
+        }
         const c = this.contact(o.to)
         if (!c) {
           this.outbox = this.outbox.filter((x) => x.id !== o.id)
@@ -1302,7 +1483,7 @@ class Store {
     const me = this.me?.id ?? 0
     const sent = new Set((this.messages[id] ?? []).map((n) => n.id))
     return this.outbox
-      .filter((o) => o.to === id && !sent.has(o.id))
+      .filter((o) => o.to === id && !sent.has(o.id) && o.plain.t !== 'group')
       .map((o) => ({ id: o.id, from_user: me, to_user: o.to, created_at: o.at, expires_at: o.at, plain: o.plain, pending: true }))
   }
 
@@ -1341,18 +1522,21 @@ class Store {
   async sendMedia(to: number, text: string) {
     const a = this.attachments[to]
     const p = a?.prepared
+    const g = this.group(to)
     const c = this.contact(to)
-    if (!p || !c || a.status !== 'ready') return
+    if (!p || (!c && !g) || a.status !== 'ready') return
     this.setAttachment(to, { ...a, status: 'sending', progress: 0 })
     try {
       const { body, key } = await encryptFile(p.data)
-      const blob = await upload(c, body, (progress) => this.setAttachment(to, { ...a, status: 'sending', progress }))
-      seedMedia(blob, p.preview)
+      const progress = (x: number) => this.setAttachment(to, { ...a, status: 'sending', progress: x })
+      const blob = g ? await uploadOwn(g.own.link_id, body, progress) : await upload(c!, body, progress)
+      seedMedia(blob, key, p.preview, g ? undefined : c)
       const plain: MediaPlain = { t: 'media', kind: p.kind, mime: p.mime, blob, key, size: p.data.length, w: p.w, h: p.h, dur: p.dur, thumb: p.thumb, text: text || undefined }
       await this.send(to, plain, [blob])
       this.setAttachment(to, undefined)
     } catch (e) {
       this.setAttachment(to, a)
+      if (!c) throw e instanceof Unreachable ? new Error("Can't reach your server right now.") : e
       if (e instanceof Gone) return this.forget(c, `${this.userName(to)} is no longer reachable and was removed from your contacts.`)
       if (e instanceof Unreachable) {
         await this.unreachableServer(c, e.retryAfter)
@@ -1363,12 +1547,608 @@ class Store {
   }
 
   async setTimer(to: number, ttl: number) {
+    const g = this.group(to)
+    if (g) {
+      g.ttl = { v: ttl, u: Math.max(this.stamp(), g.ttl.u + 1) }
+      this.touchGroup(g)
+      this.addEvent(to, `You set messages to expire after ${fmtTtl(ttl)}`)
+      return this.sendState(g)
+    }
     const c = this.contact(to)
     if (!c) return
     c.ttl = ttl
     this.touch(c)
     this.addEvent(to, `You set messages to expire after ${fmtTtl(ttl)}`)
     await this.postControl(c, { t: 'timer', ttl }).catch((e) => this.sendFailed(c, e))
+  }
+
+  // --- groups; see docs/protocol.md, section 9
+
+  group(num: number): LocalGroup | undefined {
+    return this.groups.find((g) => g.num === num)
+  }
+
+  isGroup(num: number): boolean {
+    return this.groups.some((g) => g.num === num)
+  }
+
+  private cardName(c: GroupCard): string {
+    const k = this.contacts.find((x) => x.server === c.server && x.account === c.account)
+    return k ? (k.alias ?? k.name) : c.name
+  }
+
+  memberName(num: number, id: string | undefined): string {
+    const g = this.group(num)
+    if (!g || !id) return ''
+    if (id === g.me) return 'You'
+    const e = g.members[id]
+    return isLive(e) ? this.cardName(e.c) : (g.names?.[id] ?? 'Former member')
+  }
+
+  groupRoom(num?: number): number {
+    const max = this.config.max_group_members ?? 10
+    const g = num === undefined ? undefined : this.group(num)
+    if (!g) return max - 1
+    const t = this.serverNow()
+    return max - liveCards(g).length - Object.values(g.invites).filter((i) => i.expires > t).length
+  }
+
+  memberCount(num: number): string {
+    const n = liveCards(this.group(num) ?? { name: { v: '', u: 0 }, ttl: { v: 0, u: 0 }, members: {} }).length
+    return `${n} member${n === 1 ? '' : 's'}`
+  }
+
+  groupMembers(num: number): { id: string; name: string; host: string; contact: boolean; me: boolean }[] {
+    const g = this.group(num)
+    if (!g) return []
+    return liveCards(g)
+      .map((c) => ({
+        id: c.id,
+        name: c.id === g.me ? 'You' : this.cardName(c),
+        host: hostOf(c.server),
+        contact: this.contacts.some((x) => x.server === c.server && x.account === c.account),
+        me: c.id === g.me,
+      }))
+      .sort((a, b) => Number(b.me) - Number(a.me) || a.name.localeCompare(b.name))
+  }
+
+  invitable(num: number): number[] {
+    const g = this.group(num)
+    if (!g) return []
+    const cards = liveCards(g)
+    const t = this.serverNow()
+    return this.contacts
+      .filter((c) => c.status === 'active' && !((g.invites[c.id]?.expires ?? 0) > t) && !cards.some((x) => x.server === c.server && x.account === c.account))
+      .map((c) => c.num)
+  }
+
+  joined(num: number): boolean {
+    const g = this.group(num)
+    return !!g && !g.inviter
+  }
+
+  private ownCard(id: string, link: string, token: string, gen: number): GroupCard {
+    const name = [...this.me!.display_name].slice(0, 64).join('') || this.me!.username
+    return { id, server: location.origin, account: String(this.me!.id), name, link_id: link, token, gen }
+  }
+
+  private async newGroupLink(): Promise<{ link: string; secret: Bytes; token: string }> {
+    const secret = random(32) as Bytes
+    const token = await groupToken(secret, 0)
+    let r: { link_id: string }
+    try {
+      r = await api.post<{ link_id: string }>('/api/links', { kind: 'group', gen: 0, token })
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 400) throw new Error("Your server doesn't support groups yet.")
+      throw e
+    }
+    this.groupLinks.add(r.link_id)
+    return { link: r.link_id, secret, token }
+  }
+
+  private checkSize(n: number) {
+    const max = this.config.max_group_members ?? 10
+    if (n > max) throw new Error(`Groups on this server can have up to ${max} members.`)
+  }
+
+  async createGroup(name: string, nums: number[]): Promise<number> {
+    if (!this.device) throw new Error(this.deviceError ?? 'This device is not set up yet.')
+    const n = [...name.trim()].slice(0, 64).join('')
+    if (!n) throw new Error('Enter a group name.')
+    this.checkSize(nums.length + 1)
+    const { link, secret, token } = await this.newGroupLink()
+    const me = crypto.randomUUID()
+    const t = this.stamp()
+    this.groups.push({
+      id: crypto.randomUUID(),
+      me,
+      name: { v: n, u: t },
+      ttl: { v: this.config.message_ttl_default, u: t },
+      members: { [me]: { u: t, c: this.ownCard(me, link, token, 0) } },
+      own: { link_id: link, secret: b64(secret), base: 0, gen: 0 },
+      invites: {},
+      created_at: this.serverNow(),
+      num: this.nextNum(),
+      u: t,
+    })
+    const g = this.groups.at(-1)!
+    this.touchGroup(g)
+    this.addEvent(g.num, 'You created the group.')
+    await this.invite(g, nums)
+    return g.num
+  }
+
+  async inviteToGroup(num: number, nums: number[]) {
+    const g = this.group(num)
+    if (g) await this.invite(g, nums)
+  }
+
+  private async invite(g: LocalGroup, nums: number[]) {
+    const t = this.serverNow()
+    const pending = Object.values(g.invites).filter((i) => i.expires > t).length
+    this.checkSize(liveCards(g).length + pending + nums.length)
+    const open = this.invitable(g.num)
+    for (const num of nums) {
+      const c = this.contact(num)
+      if (!c || !open.includes(num)) continue
+      const member = crypto.randomUUID()
+      g.invites[c.id] = { member, expires: t + 7 * DAY }
+      this.touchGroup(g)
+      this.addEvent(g.num, `You invited ${this.userName(num)}.`)
+      const plain: Plain = {
+        t: 'group_invite',
+        g: g.id,
+        name: g.name.v,
+        members: liveCards(g).map((x) => x.name),
+        inviter: g.me,
+        member,
+        text: `${this.me!.display_name} invited you to a group. Update Caw to join.`,
+      }
+      this.postControl(c, plain, this.config.message_ttl_max).catch((e) => this.sendFailed(c, e))
+    }
+  }
+
+  async acceptGroup(p: GroupPrompt) {
+    const c = this.contacts.find((x) => x.id === p.contact)
+    if (!c) throw new Error('This contact is not available.')
+    this.checkSize(p.members.length + 1)
+    const { link, secret, token } = await this.newGroupLink()
+    this.groupPrompts = this.groupPrompts.filter((x) => x.g !== p.g)
+    const t = this.stamp()
+    this.groups.push({
+      id: p.g,
+      me: p.member,
+      name: { v: p.name, u: 0 },
+      ttl: { v: this.config.message_ttl_default, u: 0 },
+      members: { [p.member]: { u: t, c: this.ownCard(p.member, link, token, 0) } },
+      own: { link_id: link, secret: b64(secret), base: 0, gen: 0 },
+      invites: {},
+      inviter: { contact: c.id, member: p.inviter },
+      created_at: this.serverNow(),
+      num: this.nextNum(),
+      u: t,
+    })
+    const g = this.groups.at(-1)!
+    this.touchGroup(g)
+    this.addEvent(g.num, `Waiting for ${this.userName(c.num)} to add you.`)
+    const mine = g.members[g.me]
+    if (isLive(mine)) this.postControl(c, { t: 'group_join', g: g.id, card: cardOf(mine.c) }, this.config.message_ttl_max).catch((e) => this.sendFailed(c, e))
+    this.open(g.num)
+  }
+
+  async declineGroup(p: GroupPrompt) {
+    this.groupPrompts = this.groupPrompts.filter((x) => x.g !== p.g)
+    this.goneGroups[p.g] = this.stamp()
+    this.saveContacts()
+    this.schedulePush()
+    const c = this.contacts.find((x) => x.id === p.contact)
+    if (c) await this.postControl(c, { t: 'group_decline', g: p.g }, this.config.message_ttl_max).catch(() => {})
+  }
+
+  async renameGroup(num: number, name: string) {
+    const g = this.group(num)
+    const n = [...name.trim()].slice(0, 64).join('')
+    if (!g || !n || n === g.name.v) return
+    g.name = { v: n, u: Math.max(this.stamp(), g.name.u + 1) }
+    this.touchGroup(g)
+    this.addEvent(num, `You renamed the group to ${n}.`)
+    await this.sendState(g)
+  }
+
+  async removeMember(num: number, id: string) {
+    const g = this.group(num)
+    const e = g?.members[id]
+    if (!g || !isLive(e) || id === g.me) return
+    const removed = cardOf(e.c)
+    this.cacheNames(g)
+    g.members[id] = { u: Math.max(this.stamp(), e.u + 1), gone: true }
+    g.left = { ...(g.left ?? {}), [id]: this.serverNow() }
+    this.touchGroup(g)
+    this.addEvent(num, `You removed ${this.cardName(removed)}.`)
+    await this.queueGroup(g, { t: 'group', g: g.id, m: g.me, members: { [id]: { u: g.members[id].u, gone: true } } }, [removed], this.config.message_ttl_max)
+    if (!(await this.rotate(g))) await this.sendState(g)
+  }
+
+  async leaveGroup(num: number) {
+    const g = this.group(num)
+    if (!g) return
+    const mine = g.members[g.me]
+    g.members[g.me] = { u: Math.max(this.stamp(), (mine?.u ?? 0) + 1), gone: true }
+    await this.queueGroup(g, this.stateOf(g), liveCards(g), this.config.message_ttl_max, undefined, true).catch(() => {})
+    await api.del(`/api/links/${g.own.link_id}`).catch(() => {})
+    this.forgetGroup(g)
+  }
+
+  private stateOf(g: LocalGroup): GroupState {
+    return { t: 'group', g: g.id, m: g.me, name: { ...g.name }, ttl: { ...g.ttl }, members: $state.snapshot(g.members) }
+  }
+
+  private sendState(g: LocalGroup, trigger?: string, to?: GroupCard[]) {
+    return this.queueGroup(g, this.stateOf(g), to ?? liveCards(g).filter((c) => c.id !== g.me), this.config.message_ttl_max, trigger)
+  }
+
+  private async sendGroup(g: LocalGroup, plain: Plain, blobs?: string[]) {
+    if (g.inviter) throw new Error('You can send messages once you are added to the group.')
+    const p = { ...plain, g: g.id, m: g.me, sv: await membershipDigest(digestList(g)) } as Plain
+    const cards = liveCards(g).sort((a, b) => Number(b.id === g.me) - Number(a.id === g.me))
+    await this.queueGroup(g, p, cards, g.ttl.v, undefined, false, blobs)
+  }
+
+  // cards travel with the entry when the group may be gone by delivery
+  private async queueGroup(g: LocalGroup, plain: Plain, cards: GroupCard[], ttl: number, trigger?: string, keep = false, blobs?: string[]) {
+    const id = crypto.randomUUID()
+    const secret = unb64(g.own.secret)
+    const copies: Record<string, string> = {}
+    for (const c of cards) copies[c.id] = c.id === g.me ? id : trigger ? await groupMessageId(secret, trigger, c.id) : crypto.randomUUID()
+    const held = cards.filter((c) => keep || !isLive(g.members[c.id]))
+    const o: Outgoing = { id, to: g.num, plain, blobs, at: this.serverNow(), ttl, group: g.id, copies }
+    if (held.length) o.cards = Object.fromEntries(held.map((c) => [c.id, cardOf(c)]))
+    this.outbox.push(o)
+    this.saveOutbox()
+    const entry = this.outbox.find((x) => x.id === id)!
+    try {
+      if (await this.postGroup(entry, new Set())) this.outbox = this.outbox.filter((x) => x.id !== id)
+    } catch (e) {
+      this.outbox = this.outbox.filter((x) => x.id !== id)
+      throw e
+    } finally {
+      this.saveOutbox()
+    }
+  }
+
+  // true once every copy is delivered or no longer wanted
+  private async postGroup(o: Outgoing, skip: Set<string>): Promise<boolean> {
+    const g = this.groups.find((x) => x.id === o.group)
+    for (const [mid, postId] of Object.entries(o.copies ?? {})) {
+      const e = g?.members[mid]
+      const card = isLive(e) ? e.c : o.cards?.[mid]
+      if (!card) {
+        delete o.copies![mid]
+        continue
+      }
+      const self = !!g && mid === g.me
+      if (!self && (skip.has(card.server) || (this.retry.get(card.server)?.at ?? 0) > Date.now())) {
+        skip.add(card.server)
+        continue
+      }
+      if (o.held?.[mid] === card.token) continue
+      try {
+        const stored = await this.deliverCopy(o, card, postId, self ? g : undefined)
+        delete o.copies![mid]
+        if (o.held) delete o.held[mid]
+        if (self && stored && g) this.addMine(g.num, stored.id, stored.created_at, stored.expires_at, o.plain)
+        if (!self) this.retry.delete(card.server)
+      } catch (err) {
+        if (err instanceof Unreachable) {
+          skip.add(card.server)
+          this.later(card.server, err.retryAfter)
+        } else if (err instanceof Gone || (err instanceof ApiError && err.status === 401)) {
+          o.held = { ...(o.held ?? {}), [mid]: card.token }
+        } else if (self) {
+          throw err
+        } else {
+          delete o.copies![mid]
+        }
+      }
+    }
+    return !Object.keys(o.copies ?? {}).length
+  }
+
+  // no remove-contact prompt for a member's server
+  private later(server: string, retryAfter = 0) {
+    const r = this.retry.get(server)
+    const step = retryAfter ? (r?.step ?? 0) : r ? r.step + 1 : 0
+    const wait = (retryAfter || BACKOFF[Math.min(step, BACKOFF.length - 1)]) * (1 + Math.random() * 0.2)
+    this.retry.set(server, { at: Date.now() + wait * 1000, step })
+  }
+
+  private async deliverCopy(o: Outgoing, card: GroupCard, id: string, own?: LocalGroup): Promise<Mail | null> {
+    for (let i = 0; ; i++) {
+      const devices = own ? await this.ownSealTo(i > 0) : await this.memberDevices(o.group!, card, i > 0)
+      if (!devices.length && !own) throw new Error(`${card.name} has no devices that can receive messages right now.`)
+      const m = await sealCopy(this.device!, devices, o.ttl, o.plain, id, !!own)
+      try {
+        if (!own) return await linkReq<Mail>(remote(card), 'POST', '/api/link/mail', m)
+        try {
+          return await api.post<Mail>(`/api/links/${own.own.link_id}/mail`, { ...m, blobs: o.blobs })
+        } catch (e) {
+          if (e instanceof ApiError) throw e
+          throw new Unreachable()
+        }
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) return null
+        if (!(e instanceof ApiError && e.status === 412) || i) throw e
+      }
+    }
+  }
+
+  // signing keys are kept to read a former member's mail
+  private async memberDevices(gid: string, c: GroupCard, fresh = false): Promise<PublicDevice[]> {
+    const key = `${gid}/${c.id}`
+    const hit = this.memberLists.get(key)
+    if (hit && !fresh && Date.now() - hit.at < 60_000) return hit.devices
+    const r = await linkReq<{ account: string; devices: PublicDevice[] }>(remote(c), 'GET', '/api/link/devices')
+    if (r.account !== c.account) throw new Error(`${c.name}'s server answered for someone else.`)
+    const devices = (await Promise.all(r.devices.map(async (d) => ((await certOk(d)) ? d : null)))).filter((d): d is PublicDevice => !!d)
+    this.memberLists.set(key, { at: Date.now(), devices })
+    const g = this.groups.find((x) => x.id === gid)
+    if (g) {
+      const signers = { ...(g.signers?.[c.id] ?? {}), ...Object.fromEntries(devices.map((d) => [d.id, d.sign_pub])) }
+      if (JSON.stringify(signers) !== JSON.stringify(g.signers?.[c.id] ?? {})) {
+        g.signers = { ...(g.signers ?? {}), [c.id]: signers }
+        this.saveContacts()
+      }
+    }
+    return devices
+  }
+
+  private async groupSigners(g: LocalGroup, sender: string, m: Mail): Promise<Record<string, string> | null> {
+    if (sender === g.me) {
+      if (!this.known[m.from_device]) await this.refreshDevices().catch(() => {})
+      return this.ownSigners()
+    }
+    const e = g.members[sender]
+    if (isLive(e)) {
+      if (!g.signers?.[sender]?.[m.from_device]) await this.memberDevices(g.id, e.c, true).catch(() => {})
+      return g.signers?.[sender] ?? {}
+    }
+    if (g.inviter?.member === sender) {
+      const c = this.contacts.find((x) => x.id === g.inviter!.contact)
+      return c ? this.signersFor(c, m.from_device) : null
+    }
+    // a former member: only mail its server received before this account learned it left
+    const at = g.left?.[sender]
+    return e && at !== undefined && m.created_at <= at ? (g.signers?.[sender] ?? null) : null
+  }
+
+  // decrypted first, since the sender is named inside; nothing is used before the signature checks out
+  private async openGroup(g: LocalGroup, m: Mail): Promise<{ plain: Plain; sender: string } | null> {
+    const plain = await openSealed(this.device!, m)
+    if (!plain || (plain.t !== 'text' && plain.t !== 'media' && plain.t !== 'group') || plain.g !== g.id || typeof plain.m !== 'string') return null
+    const sender = plain.m
+    const signers = await this.groupSigners(g, sender, m)
+    if (!signers || !(await signedBy(m, signers))) return null
+    this.checkDevices(g.num, m, 'to')
+    return { plain, sender }
+  }
+
+  private groupMessage(g: LocalGroup, m: Mail, plain: Plain, sender: string): Message {
+    const mine = sender === g.me
+    return {
+      id: m.id,
+      from_user: mine ? this.me!.id : g.num,
+      to_user: mine ? g.num : this.me!.id,
+      created_at: m.created_at,
+      expires_at: m.expires_at,
+      plain,
+      sender: mine ? undefined : sender,
+    }
+  }
+
+  // states first, in arrival order; a second pass reads mail from members added by them
+  private async readGroup(g: LocalGroup, list: Mail[]): Promise<Message[]> {
+    const shown: { m: Mail; plain: Plain; sender: string }[] = []
+    const order = new Map(list.map((m, i) => [m, i]))
+    let rest = [...list]
+    for (let pass = 0; pass < 2 && rest.length; pass++) {
+      const later: Mail[] = []
+      for (const m of rest) {
+        const r = await this.openGroup(g, m)
+        if (!r) later.push(m)
+        else if (r.plain.t === 'group') await this.applyGroupState(g, r.plain, m, r.sender)
+        else shown.push({ m, ...r })
+        if (!this.groups.some((x) => x.id === g.id)) return []
+      }
+      rest = later
+    }
+    await this.rotate(g)
+    return shown
+      .sort((a, b) => a.m.created_at - b.m.created_at || order.get(a.m)! - order.get(b.m)!)
+      .map(({ m, plain, sender }) => this.groupMessage(g, m, plain, sender))
+  }
+
+  private async takeGroupMail(g: LocalGroup, m: Mail) {
+    if (this.messages[g.num]?.some((n) => n.id === m.id)) return
+    const r = await this.openGroup(g, m)
+    if (!r) return
+    if (r.plain.t === 'group') return this.applyGroupState(g, r.plain, m, r.sender)
+    const msg = this.groupMessage(g, m, r.plain, r.sender)
+    this.messages[g.num] = [...(this.messages[g.num] ?? []), msg].sort((a, b) => a.created_at - b.created_at)
+    if (r.sender === g.me) return
+    const sv = (r.plain as { sv?: string }).sv
+    if (sv && sv !== (await membershipDigest(digestList(g)))) this.syncTo(g, r.sender, m.id)
+    if (!calls.active) tones.message()
+    if (this.selected === g.num && !document.hidden) this.markSeen(g.num)
+    else if (privateMessages()) this.notify('New message', '')
+    else this.notify(g.name.v, `${this.memberName(g.num, r.sender)}: ${plainText(r.plain)}`)
+  }
+
+  private syncTo(g: LocalGroup, member: string, mail: string) {
+    const key = `${g.id}/${member}`
+    if (Date.now() - (this.synced.get(key) ?? 0) < 60_000) return
+    this.synced.set(key, Date.now())
+    const e = g.members[member]
+    if (isLive(e)) this.sendState(g, `sync:${mail}`, [e.c]).catch(() => {})
+  }
+
+  private async applyGroupState(g: LocalGroup, p: GroupState, m: Mail, sender: string) {
+    if (sender === g.me) return
+    const bootstrap = !!g.inviter && sender === g.inviter.member
+    const before = goneCount(g)
+    this.cacheNames(g)
+    const r = applyState($state.snapshot(g) as Group, p, sender, this.stamp(), bootstrap)
+    if (!r) return
+    if (bootstrap) {
+      const mine = r.state.members[g.me]
+      const inviter = r.state.members[sender]
+      const c = this.contacts.find((x) => x.id === g.inviter!.contact)
+      const ok =
+        !!c &&
+        isLive(mine) &&
+        mine.c.server === location.origin &&
+        mine.c.account === String(this.me!.id) &&
+        isLive(inviter) &&
+        inviter.c.server === c.server &&
+        inviter.c.account === c.account
+      if (!ok) return
+    } else if (canon(r.state) === canon({ name: g.name, ttl: g.ttl, members: $state.snapshot(g.members) })) {
+      return
+    }
+    const who = this.memberName(g.num, sender)
+    g.name = r.state.name
+    g.ttl = r.state.ttl
+    g.members = r.state.members
+    if (r.gone.length) g.left = { ...(g.left ?? {}), ...Object.fromEntries(r.gone.map((x) => [x, Math.min(g.left?.[x] ?? Infinity, this.serverNow())])) }
+    if (bootstrap) {
+      delete g.inviter
+      g.own.base = goneCount(g)
+      this.addEvent(g.num, 'You joined the group.')
+    }
+    this.cacheNames(g)
+    this.touchGroup(g, m.created_at * 1000)
+    if (!bootstrap) for (const x of r.added) this.addEvent(g.num, `${who} added ${this.memberName(g.num, x)}.`)
+    for (const x of r.gone) this.addEvent(g.num, x === sender ? `${who} left.` : `${who} removed ${this.memberName(g.num, x)}.`)
+    if (r.renamed && !bootstrap) this.addEvent(g.num, `${who} renamed the group to ${g.name.v}.`)
+    if (r.timer && !bootstrap) this.addEvent(g.num, `${who} set messages to expire after ${fmtTtl(g.ttl.v)}.`)
+    if (!isLive(g.members[g.me])) return this.leftGroup(g, `${who} removed you from ${g.name.v}.`)
+    if (goneCount(g) > before) await this.rotate(g)
+  }
+
+  // every device of the account derives the same token; true when the full state went out
+  private async rotate(g: LocalGroup): Promise<boolean> {
+    const gen = ownGen(g)
+    const mine = g.members[g.me]
+    if (!isLive(mine) || mine.c.gen >= gen) return false
+    const token = await groupToken(unb64(g.own.secret), gen)
+    try {
+      await api.put(`/api/links/${g.own.link_id}/token`, { gen, token })
+    } catch (e) {
+      console.warn('group token', e)
+      return false
+    }
+    g.members[g.me] = { u: Math.max(this.stamp(), mine.u + 1), c: { ...mine.c, token, gen } }
+    g.own.gen = Math.max(g.own.gen, gen)
+    this.touchGroup(g)
+    await this.sendState(g, `gen:${gen}`)
+    return true
+  }
+
+  private groupInvite(c: Contact, p: Extract<Plain, { t: 'group_invite' }>, m: Mail) {
+    if (![p.g, p.member, p.inviter].every(isUuid) || typeof p.name !== 'string' || !Array.isArray(p.members)) return
+    if (this.groups.some((g) => g.id === p.g) || this.groupPrompts.some((x) => x.g === p.g)) return
+    if ((this.goneGroups[p.g] ?? -1) >= m.created_at * 1000 || m.created_at + 7 * DAY < this.serverNow()) return
+    const name = [...p.name].slice(0, 64).join('') || 'Group'
+    this.groupPrompts.push({
+      contact: c.id,
+      from: this.userName(c.num),
+      g: p.g,
+      name,
+      members: p.members.filter((x) => typeof x === 'string').slice(0, 50),
+      inviter: p.inviter,
+      member: p.member,
+    })
+    this.notify('Group invitation', `${this.userName(c.num)} invited you to ${name}.`)
+  }
+
+  // any of the inviting account's devices adds the member; the same message gives every device the same result
+  private async groupJoin(c: Contact, p: Extract<Plain, { t: 'group_join' }>, m: Mail) {
+    const g = this.groups.find((x) => x.id === p.g)
+    const inv = g?.invites[c.id]
+    if (!g || !inv || inv.expires < this.serverNow() || !validCard(p.card, inv.member) || p.card.server !== c.server || p.card.account !== c.account) return
+    delete g.invites[c.id]
+    g.members[inv.member] = { u: m.created_at * 1000, c: cardOf(p.card) }
+    this.cacheNames(g)
+    this.touchGroup(g, m.created_at * 1000)
+    this.addEvent(g.num, `${this.userName(c.num)} joined.`)
+    await this.sendState(g, `join:${m.id}`)
+  }
+
+  private groupDecline(c: Contact, p: Extract<Plain, { t: 'group_decline' }>) {
+    const g = this.groups.find((x) => x.id === p.g)
+    if (!g?.invites[c.id]) return
+    delete g.invites[c.id]
+    this.touchGroup(g)
+    this.addEvent(g.num, `${this.userName(c.num)} declined.`)
+  }
+
+  private cacheNames(g: LocalGroup) {
+    const names = { ...(g.names ?? {}) }
+    for (const c of liveCards(g)) names[c.id] = this.cardName(c)
+    g.names = names
+  }
+
+  private touchGroup(g: LocalGroup, at = this.stamp()) {
+    g.u = Math.max(at, g.u + 1)
+    this.saveContacts()
+    this.schedulePush()
+  }
+
+  private forgetGroup(g: LocalGroup, notice?: string) {
+    if (!this.groups.some((x) => x.id === g.id)) return
+    this.goneGroups[g.id] = Math.max(this.stamp(), g.u + 1)
+    this.dropGroup(g)
+    this.schedulePush()
+    if (notice) this.flash(notice)
+  }
+
+  private leftGroup(g: LocalGroup, notice: string) {
+    api.del(`/api/links/${g.own.link_id}`).catch(() => {})
+    this.forgetGroup(g, notice)
+  }
+
+  private dropGroup(g: LocalGroup) {
+    const num = g.num
+    this.groups = this.groups.filter((x) => x.id !== g.id)
+    delete this.messages[num]
+    delete this.events[num]
+    delete this.drafts[num]
+    delete this.seen[num]
+    delete this.deviceAlerts[num]
+    this.opened = this.opened.filter((x) => x !== num)
+    const keep = this.outbox.filter((o) => o.group !== g.id || o.cards)
+    if (keep.length !== this.outbox.length) {
+      this.outbox = keep
+      this.saveOutbox()
+    }
+    this.detach(num)
+    for (const k of [...this.memberLists.keys()]) if (k.startsWith(`${g.id}/`)) this.memberLists.delete(k)
+    writeLocal(`caw.seen.${this.me!.id}`, this.seen)
+    this.saveContacts()
+    if (this.selected === num) this.navigate('/')
+  }
+
+  // a former member's attachments went with its group link
+  mediaGone(num: number, n: Message): boolean {
+    const g = this.group(num)
+    return !!g && !!n.sender && !isLive(g.members[n.sender])
+  }
+
+  mediaFrom(num: number, n: Message): Remote | undefined {
+    const g = this.group(num)
+    if (!g) return n.from_user === this.me?.id ? this.remoteOf(num) : undefined
+    if (n.from_user === this.me?.id || !n.sender) return undefined
+    const e = g.members[n.sender]
+    return isLive(e) ? remote(e.c) : undefined
   }
 
   private callEnded(e: CallEnd) {
@@ -1410,6 +2190,8 @@ class Store {
         this.prompts = this.prompts.filter((p) => p.link_id !== m.link_id)
         const c = this.contacts.find((x) => x.in === m.link_id)
         if (c) this.forget(c)
+        const g = this.groups.find((x) => x.own.link_id === m.link_id)
+        if (g) this.forgetGroup(g)
         return
       }
       case 'error':

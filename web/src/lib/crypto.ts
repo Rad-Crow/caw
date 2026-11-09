@@ -88,6 +88,26 @@ async function context(dh: Bytes, enc: Bytes, pkR: Bytes, info: Bytes) {
   }
 }
 
+// group links and derived ids; see docs/protocol.md, section 9
+const GROUP_TOKEN = te.encode('caw-group-token-v1')
+const GROUP_ID = te.encode('caw-group-id-v1')
+
+export async function groupToken(secret: Bytes, gen: number): Promise<string> {
+  return b64(await hmac(secret, concat(GROUP_TOKEN, i2osp(gen, 8))))
+}
+
+export async function groupMessageId(secret: Bytes, trigger: string, member: string): Promise<string> {
+  const h = (await hmac(secret, concat(GROUP_ID, te.encode(trigger), Uint8Array.of(0), te.encode(member)))).slice(0, 16)
+  h[6] = (h[6] & 0x0f) | 0x80
+  h[8] = (h[8] & 0x3f) | 0x80
+  const x = Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`
+}
+
+export async function membershipDigest(list: string): Promise<string> {
+  return b64(bytes(await subtle.digest('SHA-256', te.encode(list))).slice(0, 16))
+}
+
 export async function aesGcm(mode: 'encrypt' | 'decrypt', key: Bytes, iv: Bytes, aad: Bytes, data: Bytes) {
   const k = await subtle.importKey('raw', key, 'AES-GCM', false, [mode])
   const params = { name: 'AES-GCM', iv, additionalData: aad }

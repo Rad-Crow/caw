@@ -227,19 +227,24 @@ class Media(private val app: CawApp) {
         return Crypto.concat(iv, Crypto.aesGcm(true, key, iv, BLOB_AAD, data)) to Crypto.b64(key)
     }
 
-    private fun cached(blob: String) = File(cacheDir, blob.filter { it.isLetterOrDigit() || it == '-' })
+    private fun safe(blob: String) = blob.filter { it.isLetterOrDigit() || it == '-' }
 
-    // sent files are kept as the local copy so a sent attachment is not downloaded again
-    fun keep(blob: String, p: Prepared) {
-        if (!p.file.renameTo(cached(blob))) p.file.delete()
+    // keyed by where the file is and its key, so a message cannot borrow another sender's file
+    private fun cached(blob: String, key: String?, from: Remote?): File {
+        val tag = Crypto.sha256("${from?.server.orEmpty()}|${key.orEmpty()}".toByteArray()).copyOf(8).joinToString("") { "%02x".format(it) }
+        return File(cacheDir, "${safe(blob)}.$tag")
     }
 
-    // received files come from the home server; sent files, if not cached, through the contact link
+    // sent files are kept as the local copy so a sent attachment is not downloaded again
+    fun keep(blob: String, key: String, p: Prepared, from: Remote?) {
+        if (!p.file.renameTo(cached(blob, key, from))) p.file.delete()
+    }
+
     suspend fun file(p: Plain, sentTo: Remote? = null): File {
         val blob = p.blob ?: throw IOException("Attachment unavailable.")
-        val lock = synchronized(locks) { locks.getOrPut(blob) { Mutex() } }
+        val f = cached(blob, p.key, sentTo)
+        val lock = synchronized(locks) { locks.getOrPut(f.name) { Mutex() } }
         return lock.withLock {
-            val f = cached(blob)
             if (f.exists()) return@withLock f
             val body = if (sentTo != null) app.api.linkDownload(sentTo, blob) else app.api.downloadBlob(blob)
             val pt = withContext(Dispatchers.Default) {
@@ -255,11 +260,13 @@ class Media(private val app: CawApp) {
     }
 
     fun drop(blob: String) {
-        cached(blob).delete()
+        val name = safe(blob)
+        cacheDir.listFiles()?.forEach { if (it.name.substringBefore('.') == name) it.delete() }
     }
 
     fun keepOnly(blobs: Set<String>) {
-        cacheDir.listFiles()?.forEach { if (it.name !in blobs) it.delete() }
+        val names = blobs.map(::safe).toSet()
+        cacheDir.listFiles()?.forEach { if (it.name.substringBefore('.') !in names) it.delete() }
     }
 
     fun clear() {

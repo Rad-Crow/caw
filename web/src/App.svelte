@@ -10,6 +10,7 @@
   import Account from './routes/Account.svelte'
   import CallOverlay from './routes/CallOverlay.svelte'
   import AddContact from './routes/AddContact.svelte'
+  import NewGroup from './routes/NewGroup.svelte'
   import ChoosePassword from './routes/ChoosePassword.svelte'
   import Unlock from './lib/Unlock.svelte'
   import PasswordChange from './lib/PasswordChange.svelte'
@@ -25,12 +26,14 @@
 
   let menuOpen = $state(false)
   let newOpen = $state(false)
+  let groupOpen = $state(false)
   let query = $state('')
   let showAll = $state(false)
   const LIMIT = 50
   const list = $derived(store.contactList(query))
   const shown = $derived(showAll || query ? list : list.slice(0, LIMIT))
   const prompt = $derived(store.prompts[0] ?? null)
+  const groupPrompt = $derived(store.groupPrompts[0] ?? null)
   const gone = $derived(store.unreachable !== null ? store.contact(store.unreachable) : undefined)
 
   function go(path: string) {
@@ -99,16 +102,17 @@
       <div class="caws-wrap">
         <ul class="caws" aria-label="Contacts">
           {#each shown as id (id)}
-            {@const u = store.peer(id)!}
+            {@const name = store.userName(id)}
+            {@const grp = store.isGroup(id)}
             {@const p = store.preview(id)}
             {@const unread = store.unread(id)}
             {@const last = store.messages[id]?.at(-1)}
             <li class="caw-row">
               <a href="/c/{id}" class="caw-item" class:active={store.selected === id && page === 'caw'} onclick={(e) => { e.preventDefault(); go(`/c/${id}`) }}>
-                <span class="avatar">{u.name.slice(0, 1).toUpperCase()}</span>
+                <span class="avatar">{#if grp}<Icon name="group" size={20} />{:else}{name.slice(0, 1).toUpperCase()}{/if}</span>
                 <span class="grow">
                   <span class="caw-top">
-                    <strong>{u.name}</strong>
+                    <strong>{name}</strong>
                     {#if store.isFavorite(id)}<span class="fav-mark" title="Favorite"><Icon name="favorite" size={14} /></span>{/if}
                     {#if last}<span class="muted small">{fmtTime(last.created_at)}</span>{/if}
                   </span>
@@ -119,8 +123,10 @@
                 </span>
               </a>
               <span class="quick">
-                <button class="icon-btn sm" aria-label="Message {u.name}" title="Message" onclick={() => { store.compose(id); menuOpen = false }}><Icon name="chat" size={18} /></button>
-                <button class="icon-btn sm" aria-label="Call {u.name}" title="Call" disabled={!!calls.active || store.contact(id)?.status !== 'active'} onclick={() => quickCall(u)}><Icon name="call" size={18} /></button>
+                <button class="icon-btn sm" aria-label="Message {name}" title="Message" onclick={() => { store.compose(id); menuOpen = false }}><Icon name="chat" size={18} /></button>
+                {#if !grp}
+                  <button class="icon-btn sm" aria-label="Call {name}" title="Call" disabled={!!calls.active || store.contact(id)?.status !== 'active'} onclick={() => quickCall(store.peer(id)!)}><Icon name="call" size={18} /></button>
+                {/if}
               </span>
             </li>
           {:else}
@@ -130,6 +136,7 @@
             <li><button class="btn text show-all" onclick={() => (showAll = true)}>Show all ({list.length})</button></li>
           {/if}
         </ul>
+        <button class="btn tonal group-fab" onclick={() => (groupOpen = true)}><Icon name="group" size={20} />New group</button>
         <button class="btn filled add-fab" onclick={() => (newOpen = true)}><Icon name="person_add" size={20} />Add contact</button>
       </div>
 
@@ -169,7 +176,7 @@
       {/each}
       <CallOverlay />
       {#if page === 'caw'}
-        <main class="caw-main"><Home onadd={() => (newOpen = true)} /></main>
+        <main class="caw-main"><Home onadd={() => (newOpen = true)} ongroup={() => (groupOpen = true)} /></main>
       {:else}
         <header class="appbar">
           <button class="icon-btn back" aria-label="Back" onclick={() => go('/')}><Icon name="arrow_back" /></button>
@@ -188,6 +195,9 @@
 
   {#if newOpen}
     <AddContact onclose={() => (newOpen = false)} />
+  {/if}
+  {#if groupOpen}
+    <NewGroup onclose={() => (groupOpen = false)} />
   {/if}
 
   {#if store.secureNow}
@@ -209,6 +219,18 @@
         <div class="pop-actions">
           <button class="btn text" onclick={() => store.declinePrompt(prompt)}>Decline</button>
           <button class="btn filled" onclick={() => store.acceptPrompt(prompt)}>Accept</button>
+        </div>
+      </div>
+    </div>
+  {:else if groupPrompt}
+    <div class="backdrop">
+      <div class="dialog prompt" role="dialog" aria-label="Group invitation">
+        <h2>{groupPrompt.from} invited you to {groupPrompt.name}</h2>
+        <p class="muted small">Members: {groupPrompt.members.join(', ')}</p>
+        <p class="muted small">Members can see your name and server.</p>
+        <div class="pop-actions">
+          <button class="btn text" onclick={() => store.declineGroup(groupPrompt)}>Decline</button>
+          <button class="btn filled" onclick={() => store.acceptGroup(groupPrompt).catch((e) => store.flash(errText(e)))}>Join</button>
         </div>
       </div>
     </div>
