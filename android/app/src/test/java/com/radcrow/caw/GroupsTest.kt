@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -49,6 +50,14 @@ class GroupsTest {
         val list = digestList(json.decodeFromJsonElement(members, t["members"]!!))
         assertEquals(str(t["list"]), list)
         assertEquals(str(t["sv"]), Crypto.membershipDigest(list))
+    }
+
+    @Test
+    fun server() {
+        for (raw in v["server"]!!.jsonArray) {
+            val c = raw.jsonObject
+            assertEquals(str(c["in"]), c["out"]!!.jsonPrimitive.contentOrNull, normServer(str(c["in"])))
+        }
     }
 
     @Test

@@ -116,6 +116,11 @@ const enterCode = async (p, code) => {
   await p.getByText(/Waiting for .* to accept/).first().waitFor()
   return (await p.locator('.add-contact .words').textContent()).trim()
 }
+const respell = (code) => {
+  const o = JSON.parse(Buffer.from(code.slice('caw:1:'.length), 'base64url'))
+  o.s = o.s.toUpperCase() + '/'
+  return 'caw:1:' + Buffer.from(JSON.stringify(o)).toString('base64url')
+}
 
 let code = await showCode(a)
 const bobWords = await enterCode(b, code)
@@ -186,7 +191,7 @@ await c.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
 step('pending pairing locks the composer; decline removes it on the other side')
 
 code = await showCode(a)
-await enterCode(c, code)
+await enterCode(c, respell(code))
 await c.getByRole('button', { name: 'Done' }).click()
 await a.getByRole('button', { name: 'Accept' }).click()
 await c.getByText('Contact added.').waitFor({ timeout: 10000 })
@@ -204,7 +209,7 @@ await a.locator('.callbar', { hasText: /\d:\d\d/ }).waitFor({ timeout: 15000 })
 await c.locator('.callbar', { hasText: /\d:\d\d/ }).waitFor({ timeout: 15000 })
 await a.getByRole('button', { name: 'Hang up' }).click()
 await c.locator('.callbar').waitFor({ state: 'detached' })
-step('carol (server 2) and alice (server 1): paired, messages both ways, call connected')
+step("carol (server 2) and alice (server 1): paired from a code with alice's address respelled (capitals, trailing slash), messages both ways, call connected")
 
 await a.locator('.caw-row', { hasText: 'Bob' }).locator('.caw-item').click()
 await a.getByPlaceholder('Message to Bob').fill('half typed')
@@ -455,7 +460,7 @@ for (const p of [b, c]) {
   await p.locator('.event', { hasText: 'You joined the group.' }).waitFor({ timeout: 15000 })
 }
 await b.locator('.event', { hasText: 'Alice added Carol.' }).waitFor({ timeout: 15000 })
-step('alice created a group; bob and carol accepted and joined')
+step("alice created a group; bob and carol accepted and joined; carol matched alice's card to the respelled address")
 
 await b.getByPlaceholder('Message to Friends').fill('hello group')
 await b.keyboard.press('Enter')

@@ -44,6 +44,64 @@
   "list": "0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f:2,7d9e1f20-3a4b-4c5d-8e6f-708192a3b4c5:x,e1d2c3b4-a5f6-4789-8a9b-0c1d2e3f4a5b:0",
   "sv": "zLiWXmP0hasivgj-C9CGPA"
  },
+ "server": [
+  {
+   "in": "https://caw.example.com",
+   "out": "https://caw.example.com"
+  },
+  {
+   "in": " HTTPS://Caw.Example.COM:443/c/3?x=1#y ",
+   "out": "https://caw.example.com"
+  },
+  {
+   "in": "https://caw.example.com/",
+   "out": "https://caw.example.com"
+  },
+  {
+   "in": "caw.example.com",
+   "out": "https://caw.example.com"
+  },
+  {
+   "in": "caw.example.com:8443",
+   "out": "https://caw.example.com:8443"
+  },
+  {
+   "in": "http://caw.example.com:80",
+   "out": "http://caw.example.com"
+  },
+  {
+   "in": "https://caw.example.com:80",
+   "out": "https://caw.example.com:80"
+  },
+  {
+   "in": "https://B\u00fccher.example",
+   "out": "https://xn--bcher-kva.example"
+  },
+  {
+   "in": "https://[2001:DB8::1]:443",
+   "out": "https://[2001:db8::1]"
+  },
+  {
+   "in": "ftp://caw.example.com",
+   "out": null
+  },
+  {
+   "in": "https://",
+   "out": null
+  },
+  {
+   "in": "",
+   "out": null
+  },
+  {
+   "in": "https://caw example.com",
+   "out": null
+  },
+  {
+   "in": "https://caw.example.com:99999",
+   "out": null
+  }
+ ],
  "apply": [
   {
    "name": "a member adds a member",
@@ -1430,6 +1488,246 @@
         "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         "gen": 0
        }
+      }
+     }
+    },
+    "added": [],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "an added card keeps its server address in normalized form",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     },
+     "c0000000-0000-4000-8000-00000000000c": {
+      "u": 2000,
+      "c": {
+       "id": "c0000000-0000-4000-8000-00000000000c",
+       "server": " HTTPS://Two.EXAMPLE:443/c/1 ",
+       "account": "1",
+       "name": "Carol",
+       "link_id": "1c000000-0000-4000-8000-000000000003",
+       "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      },
+      "c0000000-0000-4000-8000-00000000000c": {
+       "u": 2000,
+       "c": {
+        "id": "c0000000-0000-4000-8000-00000000000c",
+        "server": "https://two.example",
+        "account": "1",
+        "name": "Carol",
+        "link_id": "1c000000-0000-4000-8000-000000000003",
+        "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        "gen": 0
+       }
+      }
+     }
+    },
+    "added": [
+     "c0000000-0000-4000-8000-00000000000c"
+    ],
+    "gone": [],
+    "renamed": false,
+    "timer": false
+   }
+  },
+  {
+   "name": "an account's address in another spelling is the same account",
+   "local": {
+    "name": {
+     "v": "Friends",
+     "u": 1000
+    },
+    "ttl": {
+     "v": 86400,
+     "u": 1000
+    },
+    "members": {
+     "a0000000-0000-4000-8000-00000000000a": {
+      "u": 1000,
+      "c": {
+       "id": "a0000000-0000-4000-8000-00000000000a",
+       "server": "https://one.example",
+       "account": "1",
+       "name": "Alice",
+       "link_id": "1a000000-0000-4000-8000-000000000001",
+       "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+       "gen": 0
+      }
+     },
+     "b0000000-0000-4000-8000-00000000000b": {
+      "u": 1000,
+      "c": {
+       "id": "b0000000-0000-4000-8000-00000000000b",
+       "server": "https://one.example",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1b000000-0000-4000-8000-000000000002",
+       "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "incoming": {
+    "members": {
+     "d0000000-0000-4000-8000-00000000000d": {
+      "u": 5000,
+      "c": {
+       "id": "d0000000-0000-4000-8000-00000000000d",
+       "server": "https://ONE.example/",
+       "account": "2",
+       "name": "Bob",
+       "link_id": "1d000000-0000-4000-8000-000000000004",
+       "token": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+       "gen": 0
+      }
+     }
+    }
+   },
+   "sender": "a0000000-0000-4000-8000-00000000000a",
+   "now": 1800000000000,
+   "result": {
+    "state": {
+     "name": {
+      "v": "Friends",
+      "u": 1000
+     },
+     "ttl": {
+      "v": 86400,
+      "u": 1000
+     },
+     "members": {
+      "a0000000-0000-4000-8000-00000000000a": {
+       "u": 1000,
+       "c": {
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "server": "https://one.example",
+        "account": "1",
+        "name": "Alice",
+        "link_id": "1a000000-0000-4000-8000-000000000001",
+        "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "gen": 0
+       }
+      },
+      "b0000000-0000-4000-8000-00000000000b": {
+       "u": 1000,
+       "c": {
+        "id": "b0000000-0000-4000-8000-00000000000b",
+        "server": "https://one.example",
+        "account": "2",
+        "name": "Bob",
+        "link_id": "1b000000-0000-4000-8000-000000000002",
+        "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "gen": 0
+       }
+      },
+      "d0000000-0000-4000-8000-00000000000d": {
+       "u": 5000,
+       "gone": true
       }
      }
     },

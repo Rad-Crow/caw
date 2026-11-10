@@ -217,7 +217,7 @@ fun LoginScreen() {
         error = null
         scope.launch {
             try {
-                app.repo.signIn(server.trim().trimEnd('/'), username.trim(), password)
+                app.repo.signIn(server, username.trim(), password)
             } catch (e: Exception) {
                 error = e.message ?: "Login failed"
             } finally {

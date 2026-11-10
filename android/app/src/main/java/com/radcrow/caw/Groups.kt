@@ -6,6 +6,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -64,8 +66,6 @@ private const val AHEAD_MS = 86_400_000L
 private const val MAX_SAFE = 9007199254740991.0
 private val UUID_RE = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 private val TOKEN_RE = Regex("[A-Za-z0-9_-]{43}")
-// javascript's \s also covers these
-private val SERVER_RE = Regex("https?://[^/\\s\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+")
 
 fun liveCards(members: Map<String, Member>): List<GroupCard> = members.values.mapNotNull { it.c }
 
@@ -74,6 +74,15 @@ fun goneCount(members: Map<String, Member>): Int = members.values.count { it.c =
 fun ownGen(g: Group): Long = maxOf(0L, goneCount(g.members) - g.own.base)
 
 fun isUuid(v: String?): Boolean = v != null && UUID_RE.matches(v)
+
+// docs/protocol.md, section 1; the web's normServer must agree on every case in testdata/groups.json
+fun normServer(s: String): String? {
+    val t = s.trim()
+    val u = (if ("://" in t) t else "https://$t").toHttpUrlOrNull() ?: return null
+    val host = if (':' in u.host) "[${u.host}]" else u.host
+    val port = if (u.port == HttpUrl.defaultPort(u.scheme)) "" else ":${u.port}"
+    return "${u.scheme}://$host$port".takeIf { it.length <= 255 }
+}
 
 // untrusted values are read as javascript reads them, so both clients accept the same states
 private fun num(v: JsonElement?): Double? {
@@ -92,16 +101,16 @@ private fun isTrue(v: JsonElement?): Boolean = v is JsonPrimitive && !v.isString
 
 private fun text(v: String?, max: Int): Boolean = v != null && v.codePointCount(0, v.length) in 1..max
 
+// the card with its server address normalized; null if malformed
 fun validCard(c: JsonElement?, id: String): GroupCard? {
     val o = c as? JsonObject ?: return null
-    val server = string(o["server"]) ?: return null
+    val server = normServer(string(o["server"]) ?: return null) ?: return null
     val account = string(o["account"]) ?: return null
     val name = string(o["name"]) ?: return null
     val link = string(o["link_id"]) ?: return null
     val token = string(o["token"]) ?: return null
     val gen = stamp(o["gen"]) ?: return null
-    val ok = string(o["id"]) == id && isUuid(id) && isUuid(link) && server.length <= 255 && SERVER_RE.matches(server) &&
-        text(account, 64) && text(name, 64) && TOKEN_RE.matches(token)
+    val ok = string(o["id"]) == id && isUuid(id) && isUuid(link) && text(account, 64) && text(name, 64) && TOKEN_RE.matches(token)
     return if (ok) GroupCard(id, server, account, name, link, token, gen) else null
 }
 

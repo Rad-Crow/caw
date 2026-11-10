@@ -160,9 +160,11 @@ data class Code(val v: Int, val s: String, val t: String, val a: String, val n: 
         fun decode(text: String): Code? {
             val t = text.trim()
             if (!t.startsWith(PREFIX)) return null
-            return runCatching {
+            val c = runCatching {
                 json.decodeFromString(serializer(), String(java.util.Base64.getUrlDecoder().decode(t.removePrefix(PREFIX))))
-            }.getOrNull()?.takeIf { it.v == 1 && it.s.isNotBlank() && it.t.isNotBlank() && it.a.isNotBlank() }
+            }.getOrNull() ?: return null
+            val s = normServer(c.s) ?: return null
+            return c.copy(s = s).takeIf { it.v == 1 && it.t.isNotBlank() && it.a.isNotBlank() }
         }
     }
 }

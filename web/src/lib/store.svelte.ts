@@ -26,7 +26,7 @@ import {
   type Plain,
   type PublicDevice,
 } from './device'
-import { applyState, card as cardOf, digestList, goneCount, isLive, isUuid, liveCards, mergeGroup, ownGen, validCard, type Card as GroupCard, type Group } from './groups'
+import { applyState, card as cardOf, digestList, goneCount, isLive, isUuid, liveCards, mergeGroup, normServer, ownGen, validCard, type Card as GroupCard, type Group } from './groups'
 import { derive, newKdf, unwrapWith, wrapKey, type Kdf } from './kdf'
 import { openVault, sealVault, synced, type VaultDoc, type VaultResp } from './vault'
 import { dropMedia, encryptFile, prepare, seedMedia, TooLarge, upload, uploadOwn, type MediaPlain, type Prepared } from './media'
@@ -144,6 +144,9 @@ const isControl = (p: Plain) =>
 const isGroupContent = (p: Plain) => p.t === 'group' || ((p.t === 'text' || p.t === 'media') && p.g !== undefined)
 
 const remote = (c: GroupCard): Remote => ({ server: c.server, out: { link_id: c.link_id, token: c.token } })
+
+// cards hold normalized addresses; contacts may hold an address as it was typed
+const sameAccount = (k: Contact, c: GroupCard) => k.account === c.account && normServer(k.server) === c.server
 
 // key order does not matter when comparing copies
 const canon = (v: unknown): string =>
@@ -1002,7 +1005,7 @@ class Store {
     if (!code) throw new Error("That isn't a Caw code.")
     const account = String(this.me!.id)
     if (code.s === location.origin && code.a === account) throw new Error("That's your own code.")
-    if (this.contacts.some((c) => c.account === code.a && c.server === code.s)) throw new Error('Already a contact.')
+    if (this.contacts.some((c) => c.account === code.a && normServer(c.server) === code.s)) throw new Error('Already a contact.')
     const mine = await api.post<{ link_id: string; token: string }>('/api/links', { peer_server: code.s, peer_account: code.a })
     let out: { link_id: string; token: string }
     try {
@@ -1039,8 +1042,10 @@ class Store {
 
   private async maybeHello(m: Mail) {
     if (!this.device || this.prompts.some((p) => p.link_id === m.link_id)) return
-    const card = await openHello(this.device, m)
-    if (!card) return
+    const hello = await openHello(this.device, m)
+    const server = hello && normServer(hello.server)
+    if (!hello || !server) return
+    const card = { ...hello, server }
     const remote = this.remote(card)
     try {
       const devices = await this.peerDevices(remote)
@@ -1573,7 +1578,7 @@ class Store {
   }
 
   private cardName(c: GroupCard): string {
-    const k = this.contacts.find((x) => x.server === c.server && x.account === c.account)
+    const k = this.contacts.find((x) => sameAccount(x, c))
     return k ? (k.alias ?? k.name) : c.name
   }
 
@@ -1606,7 +1611,7 @@ class Store {
         id: c.id,
         name: c.id === g.me ? 'You' : this.cardName(c),
         host: hostOf(c.server),
-        contact: this.contacts.some((x) => x.server === c.server && x.account === c.account),
+        contact: this.contacts.some((x) => sameAccount(x, c)),
         me: c.id === g.me,
       }))
       .sort((a, b) => Number(b.me) - Number(a.me) || a.name.localeCompare(b.name))
@@ -1618,7 +1623,7 @@ class Store {
     const cards = liveCards(g)
     const t = this.serverNow()
     return this.contacts
-      .filter((c) => c.status === 'active' && !((g.invites[c.id]?.expires ?? 0) > t) && !cards.some((x) => x.server === c.server && x.account === c.account))
+      .filter((c) => c.status === 'active' && !((g.invites[c.id]?.expires ?? 0) > t) && !cards.some((x) => sameAccount(c, x)))
       .map((c) => c.num)
   }
 
@@ -2008,8 +2013,7 @@ class Store {
         mine.c.server === location.origin &&
         mine.c.account === String(this.me!.id) &&
         isLive(inviter) &&
-        inviter.c.server === c.server &&
-        inviter.c.account === c.account
+        sameAccount(c, inviter.c)
       if (!ok) return
     } else if (canon(r.state) === canon({ name: g.name, ttl: g.ttl, members: $state.snapshot(g.members) })) {
       return
@@ -2074,9 +2078,10 @@ class Store {
   private async groupJoin(c: Contact, p: Extract<Plain, { t: 'group_join' }>, m: Mail) {
     const g = this.groups.find((x) => x.id === p.g)
     const inv = g?.invites[c.id]
-    if (!g || !inv || inv.expires < this.serverNow() || !validCard(p.card, inv.member) || p.card.server !== c.server || p.card.account !== c.account) return
+    const card = inv && validCard(p.card, inv.member)
+    if (!g || !inv || inv.expires < this.serverNow() || !card || !sameAccount(c, card)) return
     delete g.invites[c.id]
-    g.members[inv.member] = { u: m.created_at * 1000, c: cardOf(p.card) }
+    g.members[inv.member] = { u: m.created_at * 1000, c: card }
     this.cacheNames(g)
     this.touchGroup(g, m.created_at * 1000)
     this.addEvent(g.num, `${this.userName(c.num)} joined.`)

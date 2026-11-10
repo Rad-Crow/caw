@@ -10,6 +10,7 @@ import com.radcrow.caw.sealed.Mail
 import com.radcrow.caw.sealed.NewMail
 import com.radcrow.caw.sealed.OwnDevice
 import com.radcrow.caw.sealed.LinkDevices
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -31,14 +32,24 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
                 .method(method, body?.toString()?.toRequestBody(jsonType))
                 .apply { prefs.token?.takeIf { server == null }?.let { header("Authorization", "Bearer $it") } }
                 .build()
-            http.newCall(req).execute().use { res ->
-                val text = res.body?.string().orEmpty()
-                if (!res.isSuccessful) {
-                    val msg = runCatching { json.parseToJsonElement(text).jsonObject.str("error") }.getOrNull()
-                    throw ApiException(res.code, msg ?: "HTTP ${res.code}")
-                }
-                text
+            execute(req).first
+        }
+
+    private fun execute(req: Request): Pair<String, HttpUrl> =
+        http.newCall(req).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) {
+                val msg = runCatching { json.parseToJsonElement(text).jsonObject.str("error") }.getOrNull()
+                throw ApiException(res.code, msg ?: "HTTP ${res.code}")
             }
+            text to res.request.url
+        }
+
+    // the address the server answers on after any redirect, with its config
+    suspend fun reach(server: String): Pair<String, ServerConfig> =
+        withContext(Dispatchers.IO) {
+            val (text, url) = execute(Request.Builder().url("$server/api/config").build())
+            (normServer(url.toString()) ?: server) to json.decodeFromString<ServerConfig>(text)
         }
 
     private suspend inline fun <reified T> get(path: String): T = json.decodeFromString(call("GET", path))

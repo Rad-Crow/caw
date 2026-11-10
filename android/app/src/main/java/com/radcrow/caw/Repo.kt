@@ -332,8 +332,8 @@ class Repo(private val app: CawApp) {
 
     // --- sign-in; only a key derived from the password is sent to the server
 
-    suspend fun signIn(server: String, username: String, password: String) {
-        val cfg = app.api.config(server)
+    suspend fun signIn(address: String, username: String, password: String) {
+        val (server, cfg) = app.api.reach(normServer(address) ?: throw IOException("That isn't a server address."))
         val s = app.api.salt(server, username)
         val kdf = com.radcrow.caw.sealed.Kdf(s.salt, s.m, s.t, s.p)
         val d = withContext(Dispatchers.Default) { Keys.derive(password, kdf) }
@@ -751,7 +751,7 @@ class Repo(private val app: CawApp) {
         app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
         val p = app.api.createPairing()
         val user = me.value!!
-        val code = Code(1, app.prefs.server!!.trimEnd('/'), p.ticket, user.id.toString(), user.displayName)
+        val code = Code(1, ownServer(), p.ticket, user.id.toString(), user.displayName)
         return code.encode() to p.expiresAt
     }
 
@@ -759,12 +759,12 @@ class Repo(private val app: CawApp) {
     suspend fun enterCode(text: String): Pair<Long, List<String>> {
         app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
         val code = Code.decode(text) ?: throw IOException("That isn't a Caw code.")
-        val own = app.prefs.server!!.trimEnd('/')
+        val own = ownServer()
         val user = me.value!!
         val account = user.id.toString()
-        val server = code.s.trimEnd('/')
+        val server = code.s
         if (server == own && code.a == account) throw IOException("That's your own code.")
-        if (contacts.value.any { it.s.account == code.a && it.server == server }) throw IOException("Already a contact.")
+        if (contacts.value.any { it.s.account == code.a && normServer(it.server) == server }) throw IOException("Already a contact.")
         val mine = app.api.createLink(server, code.a)
         val out = try {
             app.api.redeem(server, code.t, own, account)
@@ -797,13 +797,13 @@ class Repo(private val app: CawApp) {
 
     // placeholder contact for a pending pairing
     private fun remote(card: Card) = Contact(
-        Synced("", card.name, server = card.server.trimEnd('/'), account = card.account, out = LinkCred(card.linkId, card.token), inLink = "", status = "pending", createdAt = 0, updatedAt = 0),
+        Synced("", card.name, server = card.server, account = card.account, out = LinkCred(card.linkId, card.token), inLink = "", status = "pending", createdAt = 0, updatedAt = 0),
         0,
     )
 
     private suspend fun maybeHello(m: Mail) {
         if (prompts.value.any { it.linkId == m.linkId }) return
-        val card = app.sealed.openHello(m) ?: return
+        val card = app.sealed.openHello(m)?.let { h -> normServer(h.server)?.let { h.copy(server = it) } } ?: return
         val devices = runCatching { peerDevices(remote(card)) }.getOrNull() ?: return
         if (!app.sealed.signedBy(m, devices.associate { it.id to it.signPub })) return
         if (prompts.value.any { it.linkId == m.linkId } || contacts.value.any { it.inLink == m.linkId }) return
@@ -1333,10 +1333,13 @@ class Repo(private val app: CawApp) {
         groups.update { list -> list.map { if (it.g.id == id) f(it) else it } }
     }
 
-    private fun ownServer() = app.prefs.server.orEmpty().trimEnd('/')
+    private fun ownServer() = app.prefs.server.orEmpty()
+
+    // cards hold normalized addresses; contacts may hold an address as it was typed
+    private fun sameAccount(k: Contact, c: GroupCard) = k.s.account == c.account && normServer(k.server) == c.server
 
     private fun cardName(c: GroupCard): String =
-        contacts.value.find { it.server == c.server && it.s.account == c.account }?.let { it.s.alias ?: it.name } ?: c.name
+        contacts.value.find { sameAccount(it, c) }?.let { it.s.alias ?: it.name } ?: c.name
 
     fun memberName(num: Long, id: String?): String {
         val g = group(num) ?: return ""
@@ -1362,7 +1365,7 @@ class Repo(private val app: CawApp) {
         val g = group(num) ?: return emptyList()
         return liveCards(g.g.members).map { c ->
             val self = c.id == g.g.me
-            GroupMember(c.id, if (self) "You" else cardName(c), hostOf(c.server), contacts.value.any { it.server == c.server && it.s.account == c.account }, self)
+            GroupMember(c.id, if (self) "You" else cardName(c), hostOf(c.server), contacts.value.any { sameAccount(it, c) }, self)
         }.sortedWith(compareByDescending<GroupMember> { it.me }.thenBy(Collator.getInstance()) { it.name })
     }
 
@@ -1371,7 +1374,7 @@ class Repo(private val app: CawApp) {
         val cards = liveCards(g.g.members)
         val t = serverNow()
         return contacts.value
-            .filter { c -> c.status == "active" && (g.g.invites[c.id]?.expires ?: 0L) <= t && cards.none { it.server == c.server && it.account == c.s.account } }
+            .filter { c -> c.status == "active" && (g.g.invites[c.id]?.expires ?: 0L) <= t && cards.none { sameAccount(c, it) } }
             .map { it.num }
     }
 
@@ -1803,7 +1806,7 @@ class Repo(private val app: CawApp) {
             val theirs = r.state.members[sender]?.c
             val c = contacts.value.find { it.id == inviter?.contact }
             val ok = c != null && mine != null && mine.server == ownServer() && mine.account == me.value?.id?.toString() &&
-                theirs != null && theirs.server == c.server && theirs.account == c.s.account
+                theirs != null && sameAccount(c, theirs)
             if (!ok) return
         } else if (r.state == g.g.state()) {
             return
@@ -1876,7 +1879,7 @@ class Repo(private val app: CawApp) {
         val inv = g.g.invites[c.id] ?: return
         if (inv.expires < serverNow()) return
         val card = validCard(p["card"], inv.member) ?: return
-        if (card.server != c.server || card.account != c.s.account) return
+        if (!sameAccount(c, card)) return
         editGroup(gid) { it.copy(g = it.g.copy(invites = it.g.invites - c.id, members = it.g.members + (inv.member to Member(m.createdAt * 1000, card)))) }
         cacheNames(gid)
         touchGroup(gid, m.createdAt * 1000)

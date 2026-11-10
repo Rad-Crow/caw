@@ -39,7 +39,7 @@ Identifiers:
 | ticket, link token, session token | `b64` of 32 random bytes |
 | client id | UUID string chosen by a client per connection lifetime |
 
-A server is identified by its base URL (scheme and authority, no trailing slash).
+A server is identified by its address, the origin of its base URL as browsers serialize it: `http` or `https`, `://`, the host, and `:port` only when the port is not the scheme's default. Scheme and host are lowercase, a non-ASCII host is in its ASCII (IDNA) form, and there is no path, query, fragment or trailing slash; at most 255 characters. Clients bring every address they are given or receive to this form before using or comparing it, taking `https` when the scheme is missing. Cases are in `testdata/groups.json`.
 
 ## 2. Primitives
 
@@ -117,7 +117,7 @@ Contact record:
 | `name` | string | name received during pairing |
 | `alias` | string, optional | user's rename |
 | `favorite` | `true`, optional | |
-| `server` | string | contact's server base URL |
+| `server` | string | contact's server address |
 | `account` | string | contact's account id |
 | `out` | `{link_id, token}` | contact's link, used to reach the contact |
 | `in` | string | id of the account's link for the contact |
@@ -387,7 +387,7 @@ Group ids and member ids are UUIDs. A member id is chosen when the member is inv
 | card field | |
 |---|---|
 | `id` | member id |
-| `server`, `account` | the member's server base URL and account id |
+| `server`, `account` | the member's server address and account id |
 | `name` | display name, 1 to 64 characters |
 | `link_id`, `token`, `gen` | the member's group link and its token generation |
 
@@ -406,7 +406,7 @@ A device applies a state received from member `m` to its local state `L`:
 2. For each entry `e` of member `x`:
    - `x` gone in `L`: no change.
    - `e` gone: `x` becomes gone.
-   - `x` absent from `L`: `e` is added if `e.c.id` is `x` and the card is well formed: UUID ids, `server` an `http` or `https` base URL of at most 255 characters, `account` and `name` of 1 to 64 characters, `token` 32 bytes, `gen` a non-negative integer.
+   - `x` absent from `L`: `e` is added if `e.c.id` is `x` and the card is well formed: UUID ids, `server` an address (section 1), added in normalized form, `account` and `name` of 1 to 64 characters, `token` 32 bytes, `gen` a non-negative integer.
    - `x` live in `L`: `e.c` replaces the card only if `m` is `x`, `server`, `account` and `link_id` are unchanged and `gen` is greater.
 3. `name` and `ttl` are replaced if `u` is greater, or equal with a greater `v` (strings compared by code units). A `u` more than 86400000 ahead of the device's clock is ignored.
 4. If two live entries have the same `server` and `account`, the one with the greater (`u`, member id) becomes gone.
@@ -595,6 +595,6 @@ list = 0b2f7c1e-5d3a-4c8e-9f10-2a3b4c5d6e7f:2,7d9e1f20-3a4b-4c5d-8e6f-708192a3b4
 sv   = zLiWXmP0hasivgj-C9CGPA
 ```
 
-State merge cases are in `testdata/groups.json`.
+Server address cases and state merge cases are in `testdata/groups.json`.
 
 These vectors are checked by `web/test/crypto.test.ts`, `web/test/groups.test.ts`, `android/app/src/test/java/com/radcrow/caw/sealed/CryptoTest.kt`, `android/app/src/test/java/com/radcrow/caw/GroupsTest.kt` and `server/src/webpush.rs`.

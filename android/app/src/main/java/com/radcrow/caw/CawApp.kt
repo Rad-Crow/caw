@@ -41,6 +41,7 @@ class CawApp : Application() {
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
+        prefs.server?.let { s -> normServer(s)?.takeIf { it != s }?.let { prefs.server = it } }
         locked.value = prefs.appLock
         http = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

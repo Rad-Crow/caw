@@ -1,5 +1,5 @@
 // node --experimental-strip-types test/groups.test.ts
-import { applyState, mergeGroup, digestList, MAX_ENTRIES, type Entry, type Group } from '../src/lib/groups.ts'
+import { applyState, mergeGroup, digestList, normServer, MAX_ENTRIES, type Entry, type Group } from '../src/lib/groups.ts'
 import { groupToken, groupMessageId, membershipDigest, unb64 } from '../src/lib/crypto.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -15,6 +15,8 @@ const list = digestList({ name: { v: 'x', u: 0 }, ttl: { v: 1, u: 0 }, members: 
 assert.equal(list, V.digest.list)
 assert.equal(await membershipDigest(list), V.digest.sv)
 console.log('ok  membership digest')
+for (const c of V.server) assert.equal(normServer(c.in), c.out, c.in)
+console.log('ok  server addresses')
 
 for (const c of V.apply) {
   const r = applyState(c.local, c.incoming, c.sender, c.now, c.bootstrap ?? false)

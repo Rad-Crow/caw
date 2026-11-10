@@ -55,7 +55,6 @@ export const MAX_ENTRIES = 256
 const AHEAD_MS = 86_400_000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const TOKEN = /^[A-Za-z0-9_-]{43}$/
-const SERVER = /^https?:\/\/[^/\s]+$/
 
 export const isLive = (e: Entry | undefined): e is Live => !!e && 'c' in e
 export const liveCards = (s: State): Card[] => Object.values(s.members).filter(isLive).map((e) => e.c)
@@ -69,21 +68,23 @@ const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'o
 
 export const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v)
 
-export function validCard(c: unknown, id: string): c is Card {
-  if (!obj(c)) return false
-  return (
-    c.id === id &&
-    isUuid(id) &&
-    isUuid(c.link_id) &&
-    typeof c.server === 'string' &&
-    c.server.length <= 255 &&
-    SERVER.test(c.server) &&
-    text(c.account, 64) &&
-    text(c.name, 64) &&
-    typeof c.token === 'string' &&
-    TOKEN.test(c.token) &&
-    stamp(c.gen)
-  )
+// docs/protocol.md, section 1; android's normServer must agree on every case in testdata/groups.json
+export function normServer(s: string): string | null {
+  const t = s.trim()
+  try {
+    const u = new URL(t.includes('://') ? t : `https://${t}`)
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.origin.length <= 255 ? u.origin : null
+  } catch {
+    return null
+  }
+}
+
+// the card with its server address normalized; null if malformed
+export function validCard(c: unknown, id: string): Card | null {
+  if (!obj(c) || c.id !== id || !isUuid(id) || !isUuid(c.link_id) || !text(c.account, 64) || !text(c.name, 64)) return null
+  if (typeof c.server !== 'string' || typeof c.token !== 'string' || !TOKEN.test(c.token) || !stamp(c.gen)) return null
+  const server = normServer(c.server)
+  return server ? { id, server, account: c.account, name: c.name, link_id: c.link_id, token: c.token, gen: c.gen } : null
 }
 
 export const card = (c: Card): Card => ({ id: c.id, server: c.server, account: c.account, name: c.name, link_id: c.link_id, token: c.token, gen: c.gen })
@@ -124,13 +125,16 @@ export function applyState(local: State, incoming: unknown, sender: string, now:
     if (e.gone === true) {
       members[x] = { u: Math.max(l?.u ?? 0, e.u), gone: true }
       if (l) gone.push(x)
-    } else if (!validCard(e.c, x)) {
+      continue
+    }
+    const c = validCard(e.c, x)
+    if (!c) {
       continue
     } else if (!l) {
-      members[x] = { u: e.u, c: card(e.c) }
+      members[x] = { u: e.u, c }
       added.push(x)
-    } else if (sender === x && e.c.server === l.c.server && e.c.account === l.c.account && e.c.link_id === l.c.link_id && e.c.gen > l.c.gen) {
-      members[x] = { u: e.u, c: card(e.c) }
+    } else if (sender === x && c.server === l.c.server && c.account === l.c.account && c.link_id === l.c.link_id && c.gen > l.c.gen) {
+      members[x] = { u: e.u, c }
     }
   }
   // one live entry per account: the earliest stays

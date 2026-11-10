@@ -1,5 +1,6 @@
 import { ApiError } from './api'
 import { b64, unb64 } from './crypto'
+import { normServer } from './groups'
 
 // an account on any home server, including this one; see docs/protocol.md, section 4.2
 export interface Contact {
@@ -92,7 +93,8 @@ export function decodeCode(text: string): Code | null {
   if (!t.startsWith(PREFIX)) return null
   try {
     const c = JSON.parse(new TextDecoder().decode(unb64(t.slice(PREFIX.length)))) as Code
-    return c.v === 1 && c.s && c.t && c.a ? c : null
+    const s = typeof c.s === 'string' ? normServer(c.s) : null
+    return c.v === 1 && s && c.t && c.a ? { ...c, s } : null
   } catch {
     return null
   }
