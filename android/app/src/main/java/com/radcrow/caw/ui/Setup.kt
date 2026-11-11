@@ -5,8 +5,10 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -23,7 +26,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -108,6 +112,29 @@ private fun Step(done: Boolean, title: String, detail: String?, action: @Composa
     )
 }
 
+@Composable
+private fun PushAppDialog(apps: List<String>, current: String?, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val ctx = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Push app") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                apps.forEach { pkg ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onPick(pkg) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = pkg == current, onClick = null)
+                        Text(appLabel(ctx, pkg), Modifier.padding(start = 12.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SetupScreen(activity: MainActivity, onBack: () -> Unit, onDone: () -> Unit) {
@@ -125,6 +152,7 @@ fun SetupScreen(activity: MainActivity, onBack: () -> Unit, onDone: () -> Unit) 
                 TextButton(onClick = { activity.requestPermission(Manifest.permission.RECORD_AUDIO) }) { Text("Allow") }
             }
             val app = s.pushApp
+            var choosing by remember { mutableStateOf(false) }
             Step(
                 s.pushReady,
                 "Push app",
@@ -140,9 +168,13 @@ fun SetupScreen(activity: MainActivity, onBack: () -> Unit, onDone: () -> Unit) 
                     s.pushApps.isEmpty() -> TextButton(onClick = { installNtfy(ctx) }) { Text("Install ntfy") }
                 }
             }
-            if (app == null && s.pushApps.size > 1) {
-                Column(Modifier.padding(start = 56.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    s.pushApps.forEach { pkg -> OutlinedButton(onClick = { ctx.app.push.use(pkg) }) { Text(appLabel(ctx, pkg)) } }
+            if (s.pushApps.size > 1) {
+                TextButton(onClick = { choosing = true }, Modifier.padding(start = 56.dp)) { Text("Choose") }
+            }
+            if (choosing) {
+                PushAppDialog(s.pushApps, app, onDismiss = { choosing = false }) { pkg ->
+                    choosing = false
+                    if (pkg != app) ctx.app.push.use(pkg)
                 }
             }
             if (Build.VERSION.SDK_INT >= 31) {

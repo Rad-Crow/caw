@@ -175,7 +175,7 @@ Session required.
 | DELETE | `/api/push` | `{endpoint}` | `204` |
 
 - `ice_servers` is an array of `{urls}` (STUN) and `{urls, username, credential}` (TURN, time-limited, valid for `ttl` seconds).
-- `POST /api/push` registers an endpoint for the session. `p256dh` is a P-256 public key and `auth` a 16-byte secret (RFC 8291). Endpoints on private networks, or on hosts outside the configured allow-list, are rejected with `400`. The 10 most recent endpoints per account are kept.
+- `POST /api/push` registers the session's endpoint, replacing any earlier one for that session. `p256dh` is a P-256 public key and `auth` a 16-byte secret (RFC 8291). Endpoints on private networks, or on hosts outside the configured allow-list, are rejected with `400`. The 10 most recent endpoints per account are kept.
 
 ## Link endpoints
 

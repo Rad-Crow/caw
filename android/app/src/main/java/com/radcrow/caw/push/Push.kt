@@ -8,13 +8,17 @@ import org.unifiedpush.android.connector.UnifiedPush
 import org.unifiedpush.android.connector.data.PushEndpoint
 
 class Push(private val app: CawApp) {
-    val distributor = MutableStateFlow(UnifiedPush.getAckDistributor(app))
+    val distributor = MutableStateFlow(chosen())
     val endpoint = MutableStateFlow(app.prefs.pushEndpoint)
 
     fun distributors(): List<String> = UnifiedPush.getDistributors(app)
 
+    // removes any earlier registration first, so the previous app's late replies are ignored and the server forgets its endpoint
     fun use(pkg: String) {
+        UnifiedPush.removeDistributor(app)
+        onUnregistered()
         UnifiedPush.saveDistributor(app, pkg)
+        distributor.value = pkg
         register()
     }
 
@@ -25,14 +29,9 @@ class Push(private val app: CawApp) {
 
     // auto-selects when only one push app is installed; retries until an endpoint arrives, since an unopened push app ignores registrations
     fun autoPick() {
-        val saved = UnifiedPush.getSavedDistributor(app)
-        if (saved != null && saved in distributors()) {
+        if (chosen() != null) {
             if (app.prefs.pushEndpoint == null) register()
             return
-        }
-        if (saved != null) {
-            UnifiedPush.removeDistributor(app)
-            onUnregistered()
         }
         distributors().singleOrNull()?.let { use(it) }
     }
@@ -60,7 +59,7 @@ class Push(private val app: CawApp) {
         }
         app.prefs.pushEndpoint = ep.url
         endpoint.value = ep.url
-        distributor.value = UnifiedPush.getAckDistributor(app)
+        distributor.value = chosen()
         app.scope.launch {
             runCatching { app.api.registerPush(ep.url, keys.pubKey, keys.auth) }
                 .onFailure { Log.w(TAG, "push register failed", it) }
