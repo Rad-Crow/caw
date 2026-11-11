@@ -1,0 +1,3 @@
+Group conversations: create a group, invite contacts, rename it, set its timer, and add or remove members. Groups need an up-to-date Caw server.
+When more than one push app is installed, Setup lets you choose which one Caw uses.
+Server addresses match however they are typed.
