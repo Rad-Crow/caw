@@ -18,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 use crate::{
+    api::contacts::own_group_link,
     auth::{now, AuthUser},
     error::{bad, AppError, Result},
     link::Link,
@@ -41,11 +42,21 @@ fn check_id(id: &str) -> Result<()> {
 
 // uploaded by the sender, through the link, to the recipient's server
 pub async fn upload(State(app): State<Arc<App>>, link: Link, body: Body) -> Result<Json<Value>> {
-    app.limits.hit(&link.id, "blob", 20)?;
+    link.contact_only()?;
+    store(&app, &link.id, body).await
+}
+
+pub async fn own_upload(State(app): State<Arc<App>>, me: AuthUser, Path(id): Path<String>, body: Body) -> Result<Json<Value>> {
+    own_group_link(&app, me.id, &id).await?;
+    store(&app, &id, body).await
+}
+
+async fn store(app: &App, link_id: &str, body: Body) -> Result<Json<Value>> {
+    app.limits.hit(link_id, "blob", 20)?;
     let s = Settings::load(&app.db).await?;
     let limit = s.max_upload_mb * 1024 * 1024 + OVERHEAD;
     let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blobs WHERE link_id = ? AND mail_id IS NULL")
-        .bind(&link.id)
+        .bind(link_id)
         .fetch_one(&app.db)
         .await?;
     if pending >= MAX_PENDING {
@@ -54,7 +65,7 @@ pub async fn upload(State(app): State<Arc<App>>, link: Link, body: Body) -> Resu
 
     tokio::fs::create_dir_all(&app.cfg.blob_dir).await?;
     let id = uuid::Uuid::new_v4().to_string();
-    let part = path(&app, &format!("{id}.part"));
+    let part = path(app, &format!("{id}.part"));
     let mut size = 0u64;
     let res = async {
         let mut f = tokio::fs::File::create(&part).await?;
@@ -82,13 +93,13 @@ pub async fn upload(State(app): State<Arc<App>>, link: Link, body: Body) -> Resu
     let t = now();
     sqlx::query("INSERT INTO blobs (id, link_id, size, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
         .bind(&id)
-        .bind(&link.id)
+        .bind(link_id)
         .bind(size as i64)
         .bind(t)
         .bind(t + PENDING_SECS)
         .execute(&app.db)
         .await?;
-    tokio::fs::rename(&part, path(&app, &id)).await?;
+    tokio::fs::rename(&part, path(app, &id)).await?;
     Ok(Json(json!({ "id": id })))
 }
 

@@ -61,6 +61,7 @@
         message_ttl_min: settings!.message_ttl_min,
         message_ttl_max: settings!.message_ttl_max,
         max_upload_mb: settings!.max_upload_mb,
+        max_group_members: settings!.max_group_members,
       }
       document.title = settings!.server_name
     }, 'Settings saved')
@@ -151,6 +152,9 @@
         </label>
         <label>Attachment limit (MB)
           <input type="number" min="1" max="500" bind:value={settings.max_upload_mb} required />
+        </label>
+        <label>Maximum group size
+          <input type="number" min="2" max="50" bind:value={settings.max_group_members} required />
         </label>
         <label class="switch">
           <input type="checkbox" role="switch" bind:checked={settings.registration_open} />

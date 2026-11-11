@@ -201,7 +201,7 @@ fun AccountNotices() {
 }
 
 @Composable
-fun DeviceAlert(num: Long, name: String, onDevices: () -> Unit) {
+fun DeviceAlert(num: Long, name: String, group: Boolean, onDevices: () -> Unit) {
     val app = LocalContext.current.app
     val alerts by app.repo.deviceAlerts.collectAsStateWithLifecycle()
     if (num !in alerts) return
@@ -210,7 +210,7 @@ fun DeviceAlert(num: Long, name: String, onDevices: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text("A message with $name was also encrypted for a device that isn't yours.")
+            Text("A message ${if (group) "in" else "with"} $name was also encrypted for a device that isn't yours.")
             Row {
                 TextButton(onClick = onDevices) { Text("Check your devices") }
                 TextButton(onClick = { app.repo.dismissAlert(num) }) { Text("Dismiss") }

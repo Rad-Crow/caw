@@ -1,4 +1,5 @@
 import type { MediaPlain } from './media'
+import type { Card as GroupCard, Entry, Register } from './groups'
 import { api } from './api'
 import {
   aesGcm,
@@ -69,16 +70,24 @@ export interface Mail {
 // sent by the scanning side over the new link: its identity and a return link
 export type Card = { server: string; account: string; name: string; link_id: string; token: string }
 
+export type GroupFields = { g?: string; m?: string; sv?: string }
+
+export type GroupState = { t: 'group'; g: string; m: string; name?: Register<string>; ttl?: Register<number>; members?: Record<string, Entry> }
+
 export type Plain =
-  | { t: 'text'; text: string }
+  | ({ t: 'text'; text: string } & GroupFields)
   | { t: 'call'; outcome: 'answered' | 'missed' | 'declined'; secs?: number }
-  | MediaPlain
+  | (MediaPlain & GroupFields)
   // control messages, not displayed
   | { t: 'hello'; card: Card }
   | { t: 'accept' }
   | { t: 'decline' }
   | { t: 'timer'; ttl: number }
   | { t: 'bye' }
+  | GroupState
+  | { t: 'group_invite'; g: string; name: string; members: string[]; inviter: string; member: string; text: string }
+  | { t: 'group_join'; g: string; card: GroupCard }
+  | { t: 'group_decline'; g: string }
 
 // idb holds CryptoKeys as-is; private ones are non-extractable
 function idb(): Promise<IDBDatabase> {
@@ -214,18 +223,29 @@ export async function certOk(d: Partial<PublicDevice>): Promise<boolean> {
   return verify(unb64(d.sign_pub), unb64(d.enc_sig), encCertBytes(d.id, unb64(d.enc_pub), d.enc_created_at))
 }
 
-// sealed for every recipient device and every sender device (the sender's copies)
-export async function sealMail(dev: Device, to: PublicDevice[], own: PublicDevice[], ttl: number, plain: Plain, id: string = crypto.randomUUID()) {
+async function seal(dev: Device, recipients: (readonly [PublicDevice, 'to' | 'from'])[], ttl: number, plain: Plain, id: string) {
   const aad = te.encode(id)
   const ck = random(16)
   const nonce = random(12)
   const body = b64(concat(nonce, await aesGcm('encrypt', ck, nonce, aad, te.encode(JSON.stringify(plain)))))
-  const mine = dev.enc.at(-1)!
-  const ownList = own.some((d) => d.id === dev.id) ? own.map((d) => (d.id === dev.id ? { ...d, enc_pub: mine.pub } : d)) : [...own, { id: dev.id, enc_pub: mine.pub } as PublicDevice]
-  const stanza = async (d: PublicDevice, o: 'to' | 'from'): Promise<Stanza> => ({ d: d.id, k: d.enc_pub, w: b64(await hpkeSeal(unb64(d.enc_pub), INFO, aad, ck)), o })
-  const keys = [...(await Promise.all(to.map((d) => stanza(d, 'to')))), ...(await Promise.all(ownList.map((d) => stanza(d, 'from'))))]
+  const stanza = async ([d, o]: readonly [PublicDevice, 'to' | 'from']): Promise<Stanza> => ({ d: d.id, k: d.enc_pub, w: b64(await hpkeSeal(unb64(d.enc_pub), INFO, aad, ck)), o })
+  const keys = await Promise.all(recipients.map(stanza))
   const m = { id, from_device: dev.id, ttl, body, keys }
   return { ...m, sig: b64(await sign(dev.signPriv, messageSigBytes(m))) }
+}
+
+function withSelf(dev: Device, own: PublicDevice[]): PublicDevice[] {
+  const mine = dev.enc.at(-1)!
+  return own.some((d) => d.id === dev.id) ? own.map((d) => (d.id === dev.id ? { ...d, enc_pub: mine.pub } : d)) : [...own, { id: dev.id, enc_pub: mine.pub } as PublicDevice]
+}
+
+// sealed for every recipient device and every sender device (the sender's copies)
+export function sealMail(dev: Device, to: PublicDevice[], own: PublicDevice[], ttl: number, plain: Plain, id: string = crypto.randomUUID()) {
+  return seal(dev, [...to.map((d) => [d, 'to'] as const), ...withSelf(dev, own).map((d) => [d, 'from'] as const)], ttl, plain, id)
+}
+
+export function sealCopy(dev: Device, devices: PublicDevice[], ttl: number, plain: Plain, id: string, self: boolean) {
+  return seal(dev, (self ? withSelf(dev, devices) : devices).map((d) => [d, 'to'] as const), ttl, plain, id)
 }
 
 async function decrypt(dev: Device, m: Mail): Promise<Plain | null> {
@@ -251,6 +271,9 @@ export async function signedBy(m: Mail, signers: Record<string, string>): Promis
   const pub = signers[m.from_device]
   return !!pub && verify(unb64(pub), unb64(m.sig), messageSigBytes(m))
 }
+
+// group mail names its sender inside the plaintext; the caller verifies the signature before using anything else
+export const openSealed = decrypt
 
 // the caller verifies the hello against the devices behind its card
 export async function openHello(dev: Device, m: Mail): Promise<Card | null> {

@@ -23,6 +23,7 @@ export interface Settings {
   max_upload_mb: number
   device_expiry_days: number
   pairing_code_minutes: number
+  max_group_members: number
 }
 
 export interface AdminUser {

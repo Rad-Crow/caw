@@ -11,6 +11,7 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
@@ -22,6 +23,7 @@ object Crypto {
     val INFO = "caw-message-key-v1".toByteArray()
     private val rng = SecureRandom()
     private val EMPTY = ByteArray(0)
+    private const val HEX = "0123456789abcdef"
 
     fun b64(b: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(b)
     fun unb64(s: String): ByteArray = Base64.getUrlDecoder().decode(s.trimEnd('='))
@@ -135,6 +137,21 @@ object Crypto {
 
     // a call's session description, bound to the call
     fun callSig(callId: String, type: String, sdp: String) = "caw-call-v1\n$callId\n$type\n$sdp".toByteArray()
+
+    fun sha256(data: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(data)
+
+    // see docs/protocol.md, section 9
+    fun groupToken(secret: ByteArray, gen: Long): String = b64(hmac(secret, concat("caw-group-token-v1".toByteArray(), i2osp(gen, 8))))
+
+    fun groupMessageId(secret: ByteArray, trigger: String, member: String): String {
+        val h = hmac(secret, concat("caw-group-id-v1".toByteArray(), trigger.toByteArray(), byteArrayOf(0), member.toByteArray())).copyOf(16)
+        h[6] = ((h[6].toInt() and 0x0f) or 0x80).toByte()
+        h[8] = ((h[8].toInt() and 0x3f) or 0x80).toByte()
+        val x = buildString { for (b in h) append(HEX[(b.toInt() shr 4) and 15]).append(HEX[b.toInt() and 15]) }
+        return "${x.substring(0, 8)}-${x.substring(8, 12)}-${x.substring(12, 16)}-${x.substring(16, 20)}-${x.substring(20)}"
+    }
+
+    fun membershipDigest(list: String): String = b64(sha256(list.toByteArray()).copyOf(16))
 
     // derived from the link id, which both sides of a pairing know
     fun pairingWords(linkId: String, wordlist: List<String>): List<String> {

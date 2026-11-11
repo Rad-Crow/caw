@@ -10,6 +10,9 @@ mod settings;
 mod webpush;
 mod ws;
 
+#[cfg(test)]
+mod tests;
+
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use sqlx::{

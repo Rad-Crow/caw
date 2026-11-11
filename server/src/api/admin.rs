@@ -29,6 +29,7 @@ pub struct SettingsPatch {
     max_upload_mb: Option<u64>,
     device_expiry_days: Option<i64>,
     pairing_code_minutes: Option<i64>,
+    max_group_members: Option<i64>,
 }
 
 pub async fn update_settings(
@@ -78,6 +79,12 @@ pub async fn update_settings(
             return Err(bad("Pairing code expiry must be between 1 and 1440 minutes."));
         }
         s.pairing_code_minutes = m;
+    }
+    if let Some(m) = p.max_group_members {
+        if !(2..=50).contains(&m) {
+            return Err(bad("Group size must be between 2 and 50."));
+        }
+        s.max_group_members = m;
     }
     s.save(&app.db).await?;
     Ok(Json(s))

@@ -7,6 +7,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -23,6 +24,7 @@ import com.radcrow.caw.app
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -59,16 +61,20 @@ fun CawTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun Avatar(name: String, size: Dp = 40.dp) {
+fun Avatar(name: String, size: Dp = 40.dp, icon: ImageVector? = null) {
     Box(
         Modifier.size(size).background(MaterialTheme.colorScheme.primary, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            name.take(1).uppercase(),
-            color = MaterialTheme.colorScheme.onPrimary,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = (size.value * 0.42f).sp,
-        )
+        if (icon != null) {
+            Icon(icon, null, Modifier.size(size * 0.5f), tint = MaterialTheme.colorScheme.onPrimary)
+        } else {
+            Text(
+                name.take(1).uppercase(),
+                color = MaterialTheme.colorScheme.onPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = (size.value * 0.42f).sp,
+            )
+        }
     }
 }

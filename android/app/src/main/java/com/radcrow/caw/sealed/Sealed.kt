@@ -5,12 +5,15 @@ import android.os.Build
 import androidx.core.content.edit
 import com.radcrow.caw.CawApp
 import com.radcrow.caw.json
+import com.radcrow.caw.strictJson
 import com.radcrow.caw.sealed.Crypto.b64
 import com.radcrow.caw.sealed.Crypto.unb64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 
 @Serializable
@@ -102,10 +105,18 @@ data class Plain(
     val thumb: String? = null,
     val card: Card? = null,
     val ttl: Long? = null,
+    // group messages: the group, the sending member and a digest of its member list
+    val g: String? = null,
+    val m: String? = null,
+    val sv: String? = null,
 ) {
-    // control messages; never shown as bubbles
-    val control get() = t in setOf("hello", "accept", "decline", "timer", "bye")
+    fun toJson(): JsonObject = json.encodeToJsonElement(serializer(), this).jsonObject
 }
+
+// control messages; never shown as bubbles. group controls do not fit Plain and are read from the json
+val CONTROLS = setOf("hello", "accept", "decline", "timer", "bye", "group_invite", "group_join", "group_decline")
+
+fun plainOf(o: JsonObject): Plain? = runCatching { json.decodeFromJsonElement(Plain.serializer(), o) }.getOrNull()
 
 class Sealed(private val app: CawApp) {
     @Volatile var device: LocalDevice? = null
@@ -171,24 +182,32 @@ class Sealed(private val app: CawApp) {
 
     private fun sigStanzas(keys: List<Stanza>) = keys.map { Crypto.Stanza(it.d, it.k, it.w, it.o) }
 
-    // sealed for every device of the recipient and of the sender (the sender's copies)
-    suspend fun sealMail(to: List<PublicDevice>, own: List<PublicDevice>, ttl: Long, plain: Plain, id: String = UUID.randomUUID().toString()): NewMail =
+    private suspend fun seal(recipients: List<Triple<String, String, String>>, ttl: Long, plain: JsonObject, id: String): NewMail =
         withContext(Dispatchers.Default) {
             val d = device ?: error("device not set up")
-            val mine = d.enc.last()
             val aad = id.toByteArray()
             val ck = Crypto.random(16)
             val nonce = Crypto.random(12)
-            val pt = json.encodeToString(Plain.serializer(), plain).toByteArray()
-            val body = b64(Crypto.concat(nonce, Crypto.aesGcm(true, ck, nonce, aad, pt)))
-            val ownKeys = own.filter { it.id != d.id }.mapNotNull { o -> o.encPub?.let { o.id to it } } + (d.id to mine.pub)
-            val keys = to.mapNotNull { r -> r.encPub?.let { Stanza(r.id, it, b64(Crypto.hpkeSeal(unb64(it), Crypto.INFO, aad, ck)), "to") } } +
-                ownKeys.map { (id2, k) -> Stanza(id2, k, b64(Crypto.hpkeSeal(unb64(k), Crypto.INFO, aad, ck)), "from") }
+            val body = b64(Crypto.concat(nonce, Crypto.aesGcm(true, ck, nonce, aad, plain.toString().toByteArray())))
+            val keys = recipients.map { (rid, k, o) -> Stanza(rid, k, b64(Crypto.hpkeSeal(unb64(k), Crypto.INFO, aad, ck)), o) }
             val sig = Crypto.sign(unb64(d.signPriv), Crypto.messageSig(id, d.id, ttl, body, sigStanzas(keys)))
             NewMail(id, d.id, ttl, body, keys, b64(sig))
         }
 
-    private fun decrypt(m: Mail): Plain? {
+    private fun withSelf(own: List<PublicDevice>): List<Pair<String, String>> {
+        val d = device ?: error("device not set up")
+        return own.filter { it.id != d.id }.mapNotNull { o -> o.encPub?.let { o.id to it } } + (d.id to d.enc.last().pub)
+    }
+
+    suspend fun sealMail(to: List<PublicDevice>, own: List<PublicDevice>, ttl: Long, plain: JsonObject, id: String = UUID.randomUUID().toString()): NewMail =
+        seal(to.mapNotNull { r -> r.encPub?.let { Triple(r.id, it, "to") } } + withSelf(own).map { (d, k) -> Triple(d, k, "from") }, ttl, plain, id)
+
+    suspend fun sealCopy(devices: List<PublicDevice>, ttl: Long, plain: JsonObject, id: String, self: Boolean): NewMail {
+        val list = if (self) withSelf(devices) else devices.mapNotNull { r -> r.encPub?.let { r.id to it } }
+        return seal(list.map { (d, k) -> Triple(d, k, "to") }, ttl, plain, id)
+    }
+
+    private fun decrypt(m: Mail): JsonObject? {
         val d = device ?: return null
         val st = m.keys.find { it.d == d.id } ?: return null
         val key = d.enc.find { it.pub == st.k } ?: return null
@@ -196,7 +215,7 @@ class Sealed(private val app: CawApp) {
             val aad = m.id.toByteArray()
             val ck = Crypto.hpkeOpen(unb64(key.priv), unb64(key.pub), unb64(st.w), Crypto.INFO, aad)
             val body = unb64(m.body)
-            json.decodeFromString<Plain>(String(Crypto.aesGcm(false, ck, body.copyOfRange(0, 12), aad, body.copyOfRange(12, body.size))))
+            strictJson(String(Crypto.aesGcm(false, ck, body.copyOfRange(0, 12), aad, body.copyOfRange(12, body.size)))) as? JsonObject
         }.getOrNull()
     }
 
@@ -213,13 +232,16 @@ class Sealed(private val app: CawApp) {
     }
 
     // null if not sealed for this device or not signed by a device the sender's server lists
-    suspend fun openMail(m: Mail, signers: Map<String, String>): Plain? = withContext(Dispatchers.Default) {
+    suspend fun openMail(m: Mail, signers: Map<String, String>): JsonObject? = withContext(Dispatchers.Default) {
         if (!signedBy(m, signers)) null else decrypt(m)
     }
 
+    // group mail names its sender inside the plaintext; the caller verifies the signature before using anything else
+    suspend fun openSealed(m: Mail): JsonObject? = withContext(Dispatchers.Default) { decrypt(m) }
+
     // the caller verifies a hello against the devices behind its card
     suspend fun openHello(m: Mail): Card? = withContext(Dispatchers.Default) {
-        decrypt(m)?.takeIf { it.t == "hello" }?.card
+        decrypt(m)?.let(::plainOf)?.takeIf { it.t == "hello" }?.card
     }
 
     suspend fun words(linkId: String): List<String> = withContext(Dispatchers.Default) {

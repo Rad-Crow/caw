@@ -3,8 +3,13 @@ package com.radcrow.caw
 import java.io.IOException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -20,6 +25,19 @@ fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNu
 fun JsonObject.long(key: String): Long? = this[key]?.jsonPrimitive?.longOrNull
 fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
 fun JsonObject.bool(key: String): Boolean? = this[key]?.jsonPrimitive?.booleanOrNull
+
+fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+private val NUMBER = Regex("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?")
+
+private fun valid(e: JsonElement): Boolean = when (e) {
+    is JsonObject -> e.values.all(::valid)
+    is JsonArray -> e.all(::valid)
+    is JsonPrimitive -> e.isString || e.content == "true" || e.content == "false" || e.content == "null" || NUMBER.matches(e.content)
+}
+
+// kotlinx also accepts unquoted literals; refused as JSON.parse refuses them, so both clients read the same mail
+fun strictJson(text: String): JsonElement? = runCatching { json.parseToJsonElement(text) }.getOrNull()?.takeIf(::valid)
 
 // the other side of a conversation or call; id is the contact's local number
 data class Peer(val id: Long, val host: String, val name: String)
@@ -40,7 +58,7 @@ data class MailResponse(val now: Long, val mail: List<com.radcrow.caw.sealed.Mai
 data class LinkCred(@SerialName("link_id") val linkId: String, val token: String)
 
 @Serializable
-data class LinkRow(val id: String)
+data class LinkRow(val id: String, val kind: String? = null)
 
 @Serializable
 data class Pairing(val ticket: String, @SerialName("expires_at") val expiresAt: Long, val account: String = "")
@@ -74,7 +92,34 @@ data class Synced(
 data class VaultEntry(val u: Long, val c: Synced? = null, val gone: Boolean? = null)
 
 @Serializable
-data class VaultDoc(val v: Int, val contacts: Map<String, VaultEntry>)
+data class GroupEntry(val u: Long, val g: Group? = null, val gone: Boolean? = null)
+
+// unknown top-level fields are kept and written back
+data class VaultDoc(
+    val contacts: Map<String, VaultEntry> = emptyMap(),
+    val groups: Map<String, GroupEntry> = emptyMap(),
+    val extra: Map<String, JsonElement> = emptyMap(),
+) {
+    fun encode(): String =
+        JsonObject(extra + mapOf("v" to JsonPrimitive(1), "contacts" to json.encodeToJsonElement(CONTACTS, contacts), "groups" to json.encodeToJsonElement(GROUPS, groups))).toString()
+
+    companion object {
+        private val CONTACTS = MapSerializer(String.serializer(), VaultEntry.serializer())
+        private val GROUPS = MapSerializer(String.serializer(), GroupEntry.serializer())
+
+        // an unreadable group entry is skipped, not the whole document
+        fun decode(text: String): VaultDoc? {
+            val o = json.parseToJsonElement(text) as? JsonObject ?: return null
+            val v = o["v"] as? JsonPrimitive
+            if (v == null || v.isString || v.content.toDoubleOrNull() != 1.0) return null
+            val contacts = o["contacts"] as? JsonObject ?: return null
+            val groups = (o["groups"] as? JsonObject).orEmpty().mapNotNull { (id, e) ->
+                runCatching { json.decodeFromJsonElement(GroupEntry.serializer(), e) }.getOrNull()?.let { id to it }
+            }.toMap()
+            return VaultDoc(json.decodeFromJsonElement(CONTACTS, contacts), groups, o - setOf("v", "contacts", "groups"))
+        }
+    }
+}
 
 interface Remote {
     val server: String
@@ -115,9 +160,11 @@ data class Code(val v: Int, val s: String, val t: String, val a: String, val n: 
         fun decode(text: String): Code? {
             val t = text.trim()
             if (!t.startsWith(PREFIX)) return null
-            return runCatching {
+            val c = runCatching {
                 json.decodeFromString(serializer(), String(java.util.Base64.getUrlDecoder().decode(t.removePrefix(PREFIX))))
-            }.getOrNull()?.takeIf { it.v == 1 && it.s.isNotBlank() && it.t.isNotBlank() && it.a.isNotBlank() }
+            }.getOrNull() ?: return null
+            val s = normServer(c.s) ?: return null
+            return c.copy(s = s).takeIf { it.v == 1 && it.t.isNotBlank() && it.a.isNotBlank() }
         }
     }
 }
@@ -145,4 +192,5 @@ data class ServerConfig(
     @SerialName("message_ttl_min") val messageTtlMin: Long = 300,
     @SerialName("message_ttl_max") val messageTtlMax: Long = 7 * 86400,
     @SerialName("max_upload_mb") val maxUploadMb: Long = 25,
+    @SerialName("max_group_members") val maxGroupMembers: Int = 10,
 )

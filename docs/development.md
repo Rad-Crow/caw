@@ -24,12 +24,12 @@ cd web && npm install && npm run dev     # http://localhost:5173, proxies to :80
 
 ```sh
 cd server && cargo clippy && cargo test
-cd web && npm run check && node --experimental-strip-types test/crypto.test.ts
+cd web && npm run check && node --experimental-strip-types test/crypto.test.ts && node --experimental-strip-types test/groups.test.ts
 cd android && ./gradlew testDebugUnitTest
 e2e/run.sh    # two servers, headless browsers; screenshots in e2e/out/
 ```
 
-The web and Android crypto tests check the test vectors in [protocol.md](protocol.md#12-test-vectors).
+The web and Android tests check the test vectors in [protocol.md](protocol.md#13-test-vectors) and `testdata/groups.json`.
 
 ## Android
 
