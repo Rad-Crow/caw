@@ -212,6 +212,11 @@ pub async fn push_register(
     .bind(now())
     .execute(&app.db)
     .await?;
+    sqlx::query("DELETE FROM push_endpoints WHERE session = ? AND endpoint != ?")
+        .bind(&me.token_hash)
+        .bind(&req.endpoint)
+        .execute(&app.db)
+        .await?;
     sqlx::query(
         "DELETE FROM push_endpoints WHERE user_id = ?1 AND id NOT IN
          (SELECT id FROM push_endpoints WHERE user_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 10)",

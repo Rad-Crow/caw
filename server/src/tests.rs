@@ -265,3 +265,33 @@ async fn group_owner_copy_and_attachment() {
     let (st, _) = req(&s, Method::POST, &format!("/api/links/{id}/mail"), Auth::Session(&bob), Some(mail(&device, &[]))).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn push_endpoint_per_session() {
+    let s = server().await;
+    let (a, _) = account(&s, "alice").await;
+    let uid: i64 = sqlx::query_scalar("SELECT user_id FROM sessions WHERE token_hash = ?")
+        .bind(hash_token(&a))
+        .fetch_one(&s.app.db)
+        .await
+        .unwrap();
+    let a2 = random_token();
+    sqlx::query("INSERT INTO sessions (token_hash, user_id, created_at, last_seen) VALUES (?, ?, ?, ?)")
+        .bind(hash_token(&a2))
+        .bind(uid)
+        .bind(now())
+        .bind(now())
+        .execute(&s.app.db)
+        .await
+        .unwrap();
+    for (session, ep) in [(&a, "https://1.1.1.1/one"), (&a2, "https://1.1.1.1/other"), (&a, "https://1.1.1.1/two")] {
+        let body = json!({ "endpoint": ep, "p256dh": s.app.vapid.public, "auth": b64(16) });
+        let (st, _) = req(&s, Method::POST, "/api/push", Auth::Session(session), Some(body)).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+    }
+    let left: Vec<String> = sqlx::query_scalar("SELECT endpoint FROM push_endpoints ORDER BY endpoint")
+        .fetch_all(&s.app.db)
+        .await
+        .unwrap();
+    assert_eq!(left, ["https://1.1.1.1/other", "https://1.1.1.1/two"]);
+}
