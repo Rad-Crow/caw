@@ -198,7 +198,7 @@ For each message the device reads, where `own` is `to` for a message received th
 
 ### 6.1 Links
 
-A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Group links are described in [9.1](#91-group-links). Servers return `410` for unknown and revoked link ids.
+A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Group links are described in [9.1](#91-group-links). Servers return `410` for unknown and revoked link ids. Requests for different links share URLs, so clients MUST NOT answer a link request from an HTTP cache.
 
 ### 6.2 Pairing code
 
@@ -522,6 +522,7 @@ Clients MUST discard payloads that fail to decrypt.
 - Servers MUST deliver `mail` to all connections and push endpoints of the account, and `sent`, `vault`, `devices`, `link_removed` and `link_revoked` to all of the account's connections.
 - Removing or expiring a device MUST delete its sessions and close their connections.
 - Servers SHOULD encrypt stored vaults and wrapped keys with a secret held outside the database.
+- Servers MUST send `Cache-Control: no-store` with API responses.
 - Through a group link, servers MUST refuse calls, `DELETE /api/link`, `GET /api/link/mail`, `POST /api/link/blobs` and `blobs` in `POST /api/link/mail`, and MUST accept the previous token for 24 hours after it is replaced.
 - Servers SHOULD rate limit as listed in [api.md](api.md#limits).
 

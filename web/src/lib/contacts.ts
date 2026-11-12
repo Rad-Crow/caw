@@ -49,6 +49,8 @@ export async function linkReq<T>(c: Remote, method: string, path: string, body?:
   try {
     res = await fetch(c.server + path, {
       method,
+      // requests for different links share URLs, so a cached response would answer for another link
+      cache: 'no-store',
       headers: body === undefined ? { authorization: linkAuth(c) } : { authorization: linkAuth(c), 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
