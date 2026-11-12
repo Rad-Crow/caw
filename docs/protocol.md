@@ -198,7 +198,7 @@ For each message the device reads, where `own` is `to` for a message received th
 
 ### 6.1 Links
 
-A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Group links are described in [9.1](#91-group-links). Servers return `410` for unknown and revoked link ids.
+A link is used with the header `Authorization: Link <link id>.<token>`, or the query parameter `link=<link id>.<token>` on WebSocket requests. The owner creates inbound links with `POST /api/links {peer_server, peer_account}`; pairing creates one by redemption. Group links are described in [9.1](#91-group-links). Servers return `410` for unknown and revoked link ids. Requests for different links share URLs, so clients MUST NOT answer a link request from an HTTP cache.
 
 ### 6.2 Pairing code
 
@@ -219,7 +219,7 @@ Account A shows a code; account B enters it.
 5. B sends through L_A a message with plaintext `{"t": "hello", "card": {server, account, name, link_id, token}}`, where the card describes B and L_B, and then stores the contact with `status: "pending"`.
 6. A device of A that receives a message on a link with no contact treats it as a possible hello. It decrypts it, reads the device list from `card.server` with the card's link, MUST verify that `account` equals `card.account` and that the message signature verifies with a listed device, and then presents the request with the verification words for the link the message arrived on.
 7. Accept: A stores the contact with `status: "active"`, `in` the arrival link, `out` the card's link, and sends `{"t": "accept"}`. Decline: A sends `{"t": "decline"}` and revokes the arrival link.
-8. B sets `status: "active"` on `accept`, and removes the contact and revokes L_B on `decline`. B SHOULD remove a contact still pending after 1800 seconds and revoke L_B.
+8. B SHOULD keep the `sign_pub` of the devices read in step 4 to verify the reply, as a decline revokes L_A. B sets `status: "active"` on `accept`, and removes the contact and revokes L_B on `decline` or on `410` through L_A. B SHOULD remove a contact still pending after 1800 seconds and revoke L_B.
 
 ### 6.4 Verification words
 
@@ -522,6 +522,7 @@ Clients MUST discard payloads that fail to decrypt.
 - Servers MUST deliver `mail` to all connections and push endpoints of the account, and `sent`, `vault`, `devices`, `link_removed` and `link_revoked` to all of the account's connections.
 - Removing or expiring a device MUST delete its sessions and close their connections.
 - Servers SHOULD encrypt stored vaults and wrapped keys with a secret held outside the database.
+- Servers MUST send `Cache-Control: no-store` with API responses.
 - Through a group link, servers MUST refuse calls, `DELETE /api/link`, `GET /api/link/mail`, `POST /api/link/blobs` and `blobs` in `POST /api/link/mail`, and MUST accept the previous token for 24 hours after it is replaced.
 - Servers SHOULD rate limit as listed in [api.md](api.md#limits).
 

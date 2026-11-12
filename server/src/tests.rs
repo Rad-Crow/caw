@@ -295,3 +295,21 @@ async fn push_endpoint_per_session() {
         .unwrap();
     assert_eq!(left, ["https://1.1.1.1/other", "https://1.1.1.1/two"]);
 }
+
+#[tokio::test]
+async fn link_responses_are_not_cached() {
+    let s = server().await;
+    let (alice, _) = account(&s, "alice").await;
+    let (st, v) = req(&s, Method::POST, "/api/links", Auth::Session(&alice), Some(json!({ "peer_server": "https://caw.example.com", "peer_account": "7" }))).await;
+    assert_eq!(st, StatusCode::OK);
+    let (id, token) = (v["link_id"].as_str().unwrap(), v["token"].as_str().unwrap());
+    let devices = || s.http.get(format!("{}/api/link/devices", s.base)).header("authorization", format!("Link {id}.{token}")).send();
+
+    let resp = devices().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["cache-control"], "no-store");
+    assert_eq!(req(&s, Method::DELETE, &format!("/api/links/{id}"), Auth::Session(&alice), None).await.0, StatusCode::NO_CONTENT);
+    let resp = devices().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::GONE);
+    assert_eq!(resp.headers()["cache-control"], "no-store");
+}

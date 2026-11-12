@@ -10,7 +10,9 @@ use std::{path::Path, sync::Arc};
 
 use axum::{
     extract::DefaultBodyLimit,
-    http::{header, Method},
+    http::{header, HeaderValue, Method},
+    middleware,
+    response::Response,
     routing::{any, delete, get, patch, post, put},
     Router,
 };
@@ -38,6 +40,12 @@ fn link_routes() -> Router<Arc<App>> {
         .route("/api/link/blobs/{id}", get(blobs::link_download))
         .route("/api/link/ws", get(ws::guest))
         .layer(cors)
+}
+
+// link requests differ only in their credential, so a cached response would answer for another link
+async fn no_store(mut res: Response) -> Response {
+    res.headers_mut().entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
+    res
 }
 
 pub fn router(app: Arc<App>) -> Router {
@@ -78,6 +86,7 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(link_routes())
         .route("/api/{*rest}", any(|| async { AppError::NotFound }))
         .route("/ws", get(ws::handler))
+        .layer(middleware::map_response(no_store))
         .fallback_service(spa)
         .with_state(app)
 }
