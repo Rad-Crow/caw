@@ -1,0 +1,3 @@
+Adding a contact shares only your name until they accept; requests last a day by default. Adding contacts needs Caw 0.1.4 on both sides and an up-to-date Caw server.
+Photos and videos are sent without their location or other details from the original file.
+Call buttons stay clear of the navigation bar, and the message box sits directly above the keyboard.
