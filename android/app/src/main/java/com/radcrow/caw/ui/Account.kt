@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -61,7 +62,7 @@ fun ChoosePasswordScreen() {
 
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(24.dp).imePadding(),
+            Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad).padding(24.dp).imePadding(),
             verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
         ) {
             Text("Choose a password", style = MaterialTheme.typography.headlineSmall)

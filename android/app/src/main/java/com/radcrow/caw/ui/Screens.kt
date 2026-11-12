@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -228,7 +229,7 @@ fun LoginScreen() {
 
     Scaffold { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(24.dp).imePadding(),
+            Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad).padding(24.dp).imePadding(),
             verticalArrangement = Arrangement.Center,
         ) {
             Text("Caw", style = MaterialTheme.typography.headlineLarge)
@@ -606,7 +607,7 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onAd
             )
         },
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+        Column(Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad).imePadding()) {
             DeviceAlert(userId, name, grp != null, onDevices)
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
