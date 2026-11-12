@@ -22,6 +22,7 @@ android {
         versionName = "0.1.3"
         versionCode = versionCode!! * 10 + (abi?.let { abiCodes.getValue(it) } ?: 0)
         abi?.let { a -> ndk { abiFilters += a } }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // shared debug key for container and IDE builds so installs update in place
@@ -54,6 +55,7 @@ android {
     val protocol = rootProject.file("../protocol")
     check(protocol.resolve("words.txt").exists()) { "missing ../protocol/words.txt, build from the full repo" }
     sourceSets["main"].assets.srcDir(protocol)
+    sourceSets["androidTest"].assets.srcDir(rootProject.file("../testdata/media"))
 
     // f-droid rejects the signed google dependency blob
     dependenciesInfo {
@@ -83,7 +85,10 @@ dependencies {
     implementation(libs.media3.transformer)
     implementation(libs.media3.effect)
     implementation(libs.media3.common)
+    implementation(libs.media3.muxer)
     implementation(libs.work)
     implementation(libs.zxing)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }

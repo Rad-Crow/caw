@@ -24,12 +24,13 @@ cd web && npm install && npm run dev     # http://localhost:5173, proxies to :80
 
 ```sh
 cd server && cargo clippy && cargo test
-cd web && npm run check && node --experimental-strip-types test/crypto.test.ts && node --experimental-strip-types test/groups.test.ts
+cd web && npm run check && node --experimental-strip-types test/crypto.test.ts && node --experimental-strip-types test/groups.test.ts && node --experimental-strip-types test/remux.test.ts
 cd android && ./gradlew testDebugUnitTest
+cd android && ./gradlew connectedDebugAndroidTest    # needs a device or emulator
 e2e/run.sh    # two servers, headless browsers; screenshots in e2e/out/
 ```
 
-The web and Android tests check the test vectors in [protocol.md](protocol.md#13-test-vectors) and `testdata/groups.json`.
+The web and Android tests check the test vectors in [protocol.md](protocol.md#13-test-vectors) and `testdata/groups.json`. `testdata/media` holds a photo and two videos (H.264 and VP9) with location and other metadata; the web, Android and e2e tests check that none of it is sent.
 
 ## Android
 

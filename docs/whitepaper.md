@@ -60,7 +60,7 @@ Each side receives on its own server and sends directly to the other's. The serv
 
 ### 3.3 Messages
 
-A message is encrypted once with a random key, and that key is encrypted with HPKE for every device of the recipient's account and every device of the sender's account. Each of these key stanzas names its device and says whether it belongs to the recipient or the sender. The sending device signs the message, including the stanzas. The message is stored on the recipient's server until it expires; the sender's devices read their own copies from the same place through their link. Attachments are encrypted separately, uploaded to the recipient's server and expire with their message.
+A message is encrypted once with a random key, and that key is encrypted with HPKE for every device of the recipient's account and every device of the sender's account. Each of these key stanzas names its device and says whether it belongs to the recipient or the sender. The sending device signs the message, including the stanzas. The message is stored on the recipient's server until it expires; the sender's devices read their own copies from the same place through their link. Attachments are encrypted separately, uploaded to the recipient's server and expire with their message. Before encryption, clients re-encode photos and transcode or remux videos, so no location, device details or tags from the original file are sent.
 
 ### 3.4 Calls
 

@@ -18,7 +18,7 @@ SETUP2=$(docker logs caw-e2e2 2>&1 | grep -o 'invite/[A-Za-z0-9_-]*' | cut -d/ -
 
 # shares the caw network namespace so the page is on localhost, a secure context
 rc=0
-docker run -i --name caw-e2e-pw --network container:caw-e2e -e SETUP="$SETUP" -e SETUP2="$SETUP2" -e DEBUG="$DEBUG" -w /t $PW \
+docker run -i --name caw-e2e-pw --network container:caw-e2e -e SETUP="$SETUP" -e SETUP2="$SETUP2" -e DEBUG="$DEBUG" -v "$PWD/testdata/media:/media:ro,z" -w /t $PW \
   sh -c 'cat > call.mjs && npm i -s playwright@1.56.0 >/dev/null 2>&1 && node call.mjs' < e2e/call.mjs || rc=$?
 rm -rf e2e/out && docker cp caw-e2e-pw:/out e2e/out >/dev/null 2>&1 || true
 exit $rc

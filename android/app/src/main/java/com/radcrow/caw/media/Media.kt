@@ -21,6 +21,7 @@ import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.InAppMuxer
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
@@ -77,7 +78,7 @@ class Media(private val app: CawApp) {
 
     suspend fun prepare(uri: Uri, limit: Long, onProgress: (Float) -> Unit): Prepared {
         val mime = app.contentResolver.getType(uri).orEmpty()
-        val p = if (mime.startsWith("video/")) prepareVideo(uri, mime, limit, onProgress) else withContext(Dispatchers.IO) { prepareImage(uri) }
+        val p = if (mime.startsWith("video/")) prepareVideo(uri, limit, onProgress) else withContext(Dispatchers.IO) { prepareImage(uri) }
         if (p.size > limit) {
             p.file.delete()
             throw TooLarge()
@@ -146,7 +147,7 @@ class Media(private val app: CawApp) {
         }
     }
 
-    private suspend fun prepareVideo(uri: Uri, mime: String, limit: Long, onProgress: (Float) -> Unit): Prepared {
+    private suspend fun prepareVideo(uri: Uri, limit: Long, onProgress: (Float) -> Unit): Prepared {
         val src = withContext(Dispatchers.IO) { info { it.setDataSource(app, uri) } }
         val steps = listOf(720 to 1_500_000, 480 to 700_000)
         var out: File? = null
@@ -156,29 +157,42 @@ class Media(private val app: CawApp) {
                 .onFailure { Log.w(TAG, "transcode", it) }.getOrNull()
             if (out == null || out.length() <= limit) break
         }
-        // could not shrink it; the original is sent only if it fits and is mp4
+        // could not shrink it; the original is sent remuxed, which drops its metadata
         if (out == null || out.length() > limit) {
             out?.delete()
-            if (mime != "video/mp4") throw TooLarge()
-            out = File.createTempFile("vid", ".mp4", outDir)
-            withContext(Dispatchers.IO) { app.contentResolver.openInputStream(uri)!!.use { i -> out.outputStream().use { i.copyTo(it) } } }
+            out = runCatching { remux(uri) }.onFailure { Log.w(TAG, "remux", it) }.getOrNull()
+                ?: throw IOException("Could not process the video.")
         }
         val file = out
         val i = withContext(Dispatchers.IO) { info { it.setDataSource(file.path) } }
         return Prepared("video", "video/mp4", file, i.w, i.h, i.dur, i.frame?.let(::thumbOf).orEmpty())
     }
 
-    private suspend fun transcode(uri: Uri, src: Info, short: Int, bitrate: Int, onProgress: (Float) -> Unit): File =
+    private suspend fun transcode(uri: Uri, src: Info, short: Int, bitrate: Int, onProgress: (Float) -> Unit): File {
+        // encoders reject odd dimensions
+        val scaled = { d: Int -> (d * short / min(src.w, src.h)) / 2 * 2 }
+        val effects = if (min(src.w, src.h) > short) {
+            Effects(emptyList(), listOf(Presentation.createForWidthAndHeight(scaled(src.w), scaled(src.h), Presentation.LAYOUT_SCALE_TO_FIT)))
+        } else {
+            Effects.EMPTY
+        }
+        val item = EditedMediaItem.Builder(MediaItem.fromUri(uri)).setEffects(effects).build()
+        return export(item, onProgress) {
+            setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setEncoderFactory(
+                    DefaultEncoderFactory.Builder(app)
+                        .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
+                        .build(),
+                )
+        }
+    }
+
+    internal suspend fun remux(uri: Uri): File = export(EditedMediaItem.Builder(MediaItem.fromUri(uri)).build(), {}) { this }
+
+    private suspend fun export(item: EditedMediaItem, onProgress: (Float) -> Unit, configure: Transformer.Builder.() -> Transformer.Builder): File =
         withContext(Dispatchers.Main) {
             val file = File.createTempFile("vid", ".mp4", outDir)
-            // encoders reject odd dimensions
-            val scaled = { d: Int -> (d * short / min(src.w, src.h)) / 2 * 2 }
-            val effects = if (min(src.w, src.h) > short) {
-                Effects(emptyList(), listOf(Presentation.createForWidthAndHeight(scaled(src.w), scaled(src.h), Presentation.LAYOUT_SCALE_TO_FIT)))
-            } else {
-                Effects.EMPTY
-            }
-            val item = EditedMediaItem.Builder(MediaItem.fromUri(uri)).setEffects(effects).build()
             var t: Transformer? = null
             val poll = launch {
                 val holder = ProgressHolder()
@@ -190,13 +204,9 @@ class Media(private val app: CawApp) {
             try {
                 suspendCancellableCoroutine { cont ->
                     val tr = Transformer.Builder(app)
-                        .setVideoMimeType(MimeTypes.VIDEO_H264)
-                        .setAudioMimeType(MimeTypes.AUDIO_AAC)
-                        .setEncoderFactory(
-                            DefaultEncoderFactory.Builder(app)
-                                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
-                                .build(),
-                        )
+                        .configure()
+                        // writes no source metadata; the platform muxer would also add the Android version, and on some phones the maker and model
+                        .setMuxerFactory(InAppMuxer.Factory.Builder().setMetadataProvider { it.clear() }.build())
                         .addListener(object : Transformer.Listener {
                             override fun onCompleted(composition: Composition, result: ExportResult) {
                                 if (cont.isActive) cont.resume(file)
