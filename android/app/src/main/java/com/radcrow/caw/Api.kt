@@ -165,6 +165,10 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
         call("DELETE", "/api/links/$id")
     }
 
+    suspend fun acceptRequest(id: String) {
+        call("POST", "/api/links/$id/accept", JsonObject(emptyMap()))
+    }
+
     suspend fun myMail(): MailResponse = get("/api/mail")
 
     suspend fun downloadBlob(id: String): ByteArray = withContext(Dispatchers.IO) {
@@ -205,6 +209,8 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
             text
         }
     }
+
+    suspend fun linkState(c: Remote): LinkState = json.decodeFromString(remote(c, "GET", "/api/link"))
 
     suspend fun linkDevices(c: Remote): LinkDevices = json.decodeFromString(remote(c, "GET", "/api/link/devices"))
 
@@ -248,11 +254,11 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
         blobId(remote(c, "POST", "/api/link/blobs", counted(body, onProgress)))
 
     // authorized by the ticket alone
-    suspend fun redeem(server: String, ticket: String, peerServer: String, peerAccount: String): LinkCred = withContext(Dispatchers.IO) {
+    suspend fun redeem(server: String, ticket: String, wait: Long, request: String?): Redeemed = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("ticket", ticket)
-            put("peer_server", peerServer)
-            put("peer_account", peerAccount)
+            put("wait", wait)
+            request?.let { put("request", it) }
         }
         val req = Request.Builder().url(server.trimEnd('/') + "/api/pairings/redeem").post(body.toString().toRequestBody(jsonType)).build()
         val res = try {

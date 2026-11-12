@@ -212,10 +212,9 @@
   {:else if prompt}
     <div class="backdrop">
       <div class="dialog prompt" role="dialog" aria-label="New contact">
-        <h2>{prompt.card.name} wants to add you</h2>
-        <p class="muted small">{hostOf(prompt.card.server)}</p>
+        <h2>{prompt.name || 'Someone'} wants to add you</h2>
         <p class="words">{prompt.words.join(' ')}</p>
-        <p class="muted small">Check that {prompt.card.name} sees the same words.</p>
+        <p class="muted small">Check that {prompt.name ? `${prompt.name} sees` : 'they see'} the same words.</p>
         <div class="pop-actions">
           <button class="btn text" onclick={() => store.declinePrompt(prompt)}>Decline</button>
           <button class="btn filled" onclick={() => store.acceptPrompt(prompt)}>Accept</button>

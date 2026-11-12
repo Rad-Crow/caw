@@ -47,7 +47,7 @@ A user's password is turned into two keys on the device with Argon2id. One, the 
 
 ### 3.2 Contacts
 
-Account A shows a pairing code, as a QR code or shared as an image and text. The code carries A's server address, a single-use ticket, A's account id and A's name. Account B scans or pastes it. B's client creates a link on B's server for A, redeems the ticket on A's server to obtain a link for B, and sends A an encrypted hello through it. Both screens show six verification words derived from the new link; A accepts or declines.
+Account A shows a pairing code, as a QR code or shared as an image and text. The code carries A's server address, a single-use ticket, A's account id, A's name and a key for sealing requests. Account B scans or pastes it. B's client redeems the ticket on A's server, which creates a pending link for B, and sends only B's name, sealed to that key. Both screens show six verification words derived from the new link; A accepts or declines. Until A accepts, the pending link only tells B the request's state, and A's devices do not contact B's server. Once A accepts, B's client creates a link on B's server for A and sends it, with B's details, through A's link. A request lasts as long as both servers allow, one day by default.
 
 A link is a capability: a random token that lets its holder deliver messages and calls to one account, and nothing else. After pairing, each side holds a link on the other's server:
 
@@ -82,7 +82,7 @@ As a result, servers do not need to trust or know about each other, a server can
 
 ### 4.2 Pairing as the only way to add contacts
 
-Caw has no user directory, search, or address that can be used without the account owner's participation. Every contact relationship begins with a code the owner chose to show or share. Codes are single use, expire, and the owner must accept the resulting request. Unsolicited messages require a link, and links are rate limited and revocable. The cost is that two people must exchange a code through some channel before they can communicate.
+Caw has no user directory, search, or address that can be used without the account owner's participation. Every contact relationship begins with a code the owner chose to show or share. Codes are single use, expire, and the owner must accept the resulting request. Until then the requester gives only a name, so handing out codes does not collect the details of those who use them. Unsolicited messages require a link, and links are rate limited and revocable. The cost is that two people must exchange a code through some channel before they can communicate.
 
 ### 4.3 The server as device directory
 
@@ -188,7 +188,7 @@ The server is not trusted with message or attachment contents, the password, the
 
 Caw protects content, not metadata.
 
-- A home server knows its accounts' contact relationships at the level of links, including each contact's server and account as stated at pairing, and the time and size of every message in each mailbox.
+- A home server knows its accounts' contact relationships at the level of links, including the contact's server and account for links its accounts create (not for links made by redeeming their codes), and the time and size of every message in each mailbox.
 - The recipient's server sees the IP address of every client that posts to it, including contacts on other servers.
 - The sender's own server learns when its users send messages, but not to whom.
 - Pairing codes contain the account's numeric id.

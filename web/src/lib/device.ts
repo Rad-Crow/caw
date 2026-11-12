@@ -80,10 +80,7 @@ export type Plain =
   | (MediaPlain & GroupFields)
   // control messages, not displayed
   | { t: 'hello'; card: Card }
-  | { t: 'accept' }
-  | { t: 'decline' }
   | { t: 'timer'; ttl: number }
-  | { t: 'bye' }
   | GroupState
   | { t: 'group_invite'; g: string; name: string; members: string[]; inviter: string; member: string; text: string }
   | { t: 'group_join'; g: string; card: GroupCard }

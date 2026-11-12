@@ -1,5 +1,5 @@
 // node --experimental-strip-types test/crypto.test.ts
-import { b64, unb64, hpkeOpen, hpkeSeal, newX25519, newEd25519, sign, verify, pairingWords, messageSigBytes, callSigBytes, INFO } from '../src/lib/crypto.ts'
+import { b64, unb64, hpkeOpen, hpkeSeal, newX25519, newEd25519, sign, verify, pairingWords, messageSigBytes, callSigBytes, INFO, requestKey, sealRequest, openRequest, helloId, requestContactId } from '../src/lib/crypto.ts'
 import { argon2id } from 'hash-wasm'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -46,3 +46,13 @@ const out = await argon2id({ password: 'correct horse battery staple', salt: unb
 assert.equal(b64(out.slice(0, 32)), '9YPGbrDJg_a-DxgB00WA26bOORo13vYf7QQ8Nl3DfFI')
 assert.equal(b64(out.slice(32)), '8cKBUJdhXyGHl-1XTHCE7SH9Jgm40LNwa__U3sfmrrg')
 console.log('ok  argon2id vector')
+
+const rk = await requestKey(unb64('AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'))
+assert.equal(b64(rk.pub), 'ruLfkL5uTuSU7f1JqZJ_tsVPJO0Ct_GYTLZ6fsMLtE4')
+assert.equal(await openRequest(rk, await sealRequest(rk.pub, 'Bob')), 'Bob')
+assert.equal(await openRequest(await newX25519(), await sealRequest(rk.pub, 'Bob')), null)
+console.log('ok  request key vector; a request opens only with its key')
+
+assert.equal(await helloId('0b1f2a3c-4d5e-4f60-8a71-92b3c4d5e6f7'), '924e8313-800c-8771-997e-450c0ddc8847')
+assert.equal(await requestContactId('0b1f2a3c-4d5e-4f60-8a71-92b3c4d5e6f7'), '3aee150e-f8d1-89d8-8682-09b1418af66b')
+console.log('ok  hello and contact id vectors')

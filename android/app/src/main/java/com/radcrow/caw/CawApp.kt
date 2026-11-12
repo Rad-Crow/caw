@@ -65,7 +65,10 @@ class CawApp : Application() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 visible = true
-                if (prefs.token != null) socket.start()
+                if (prefs.token != null) {
+                    socket.start()
+                    repo.onForeground()
+                }
             }
 
             override fun onStop(owner: LifecycleOwner) {

@@ -29,6 +29,7 @@ pub struct SettingsPatch {
     max_upload_mb: Option<u64>,
     device_expiry_days: Option<i64>,
     pairing_code_minutes: Option<i64>,
+    pairing_request_hours: Option<i64>,
     max_group_members: Option<i64>,
 }
 
@@ -79,6 +80,12 @@ pub async fn update_settings(
             return Err(bad("Pairing code expiry must be between 1 and 1440 minutes."));
         }
         s.pairing_code_minutes = m;
+    }
+    if let Some(h) = p.pairing_request_hours {
+        if !(1..=720).contains(&h) {
+            return Err(bad("Request length must be between 1 and 720 hours."));
+        }
+        s.pairing_request_hours = h;
     }
     if let Some(m) = p.max_group_members {
         if !(2..=50).contains(&m) {

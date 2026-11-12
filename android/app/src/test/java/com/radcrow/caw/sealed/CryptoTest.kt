@@ -65,6 +65,17 @@ class CryptoTest {
         assertEquals("zLiWXmP0hasivgj-C9CGPA", Crypto.membershipDigest(list))
     }
 
+    // docs/protocol.md, section 13
+    @Test
+    fun requestVectors() {
+        val (sk, pk) = Crypto.requestKey(unb64("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"))
+        assertEquals("ruLfkL5uTuSU7f1JqZJ_tsVPJO0Ct_GYTLZ6fsMLtE4", b64(pk))
+        val sealed = Crypto.hpkeSeal(pk, Crypto.REQUEST_INFO, ByteArray(0), "name".toByteArray())
+        assertArrayEquals("name".toByteArray(), Crypto.hpkeOpen(sk, pk, sealed, Crypto.REQUEST_INFO, ByteArray(0)))
+        assertEquals("924e8313-800c-8771-997e-450c0ddc8847", Crypto.helloId("0b1f2a3c-4d5e-4f60-8a71-92b3c4d5e6f7"))
+        assertEquals("3aee150e-f8d1-89d8-8682-09b1418af66b", Crypto.requestContactId("0b1f2a3c-4d5e-4f60-8a71-92b3c4d5e6f7"))
+    }
+
     // vector from hash-wasm, as used by the web client
     @Test
     fun argon2idVector() {

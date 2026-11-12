@@ -24,6 +24,7 @@ use tower_http::{
 use crate::{error::AppError, ws, App};
 
 pub use blobs::sweep as sweep_blobs;
+pub use contacts::sweep_requests;
 
 // cross-origin routes authorized by a link token; bearer only, no cookies
 fn link_routes() -> Router<Arc<App>> {
@@ -33,7 +34,7 @@ fn link_routes() -> Router<Arc<App>> {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
     Router::new()
         .route("/api/pairings/redeem", post(contacts::redeem_pairing))
-        .route("/api/link", delete(contacts::drop_link))
+        .route("/api/link", get(contacts::link_state).delete(contacts::drop_link))
         .route("/api/link/devices", get(contacts::link_devices))
         .route("/api/link/mail", get(contacts::link_mail).post(contacts::send_mail))
         .route("/api/link/blobs", post(blobs::upload).layer(DefaultBodyLimit::disable()))
@@ -72,6 +73,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/links", get(contacts::my_links).post(contacts::create_link))
         .route("/api/links/{id}", delete(contacts::revoke_link))
         .route("/api/links/{id}/token", put(contacts::set_token))
+        .route("/api/links/{id}/accept", post(contacts::accept_request))
         .route("/api/links/{id}/mail", post(contacts::own_mail))
         .route("/api/links/{id}/blobs", post(blobs::own_upload).layer(DefaultBodyLimit::disable()))
         .route("/api/mail", get(contacts::my_mail))

@@ -58,7 +58,19 @@ data class MailResponse(val now: Long, val mail: List<com.radcrow.caw.sealed.Mai
 data class LinkCred(@SerialName("link_id") val linkId: String, val token: String)
 
 @Serializable
-data class LinkRow(val id: String, val kind: String? = null)
+data class LinkRow(
+    val id: String,
+    val kind: String? = null,
+    val state: String? = null,
+    @SerialName("expires_at") val expiresAt: Long? = null,
+    val request: String? = null,
+)
+
+@Serializable
+data class Redeemed(@SerialName("link_id") val linkId: String, val token: String, @SerialName("expires_at") val expiresAt: Long)
+
+@Serializable
+data class LinkState(val state: String, @SerialName("expires_at") val expiresAt: Long? = null)
 
 @Serializable
 data class Pairing(val ticket: String, @SerialName("expires_at") val expiresAt: Long, val account: String = "")
@@ -85,6 +97,8 @@ data class Synced(
     @SerialName("created_at") val createdAt: Long,
     val ttl: Long? = null,
     val words: List<String>? = null,
+    // seconds; when a pending request ends
+    @SerialName("expires_at") val expiresAt: Long? = null,
     @SerialName("updated_at") val updatedAt: Long,
 )
 
@@ -151,11 +165,12 @@ class Unreachable(val retryAfter: Long = 0) : IOException("unreachable")
 
 // payload of a pairing QR or pasted code
 @Serializable
-data class Code(val v: Int, val s: String, val t: String, val a: String, val n: String = "") {
+data class Code(val v: Int, val s: String, val t: String, val a: String, val n: String = "", val k: String? = null) {
     fun encode() = PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.encodeToString(serializer(), this).toByteArray())
 
     companion object {
-        private const val PREFIX = "caw:1:"
+        private const val PREFIX = "caw:2:"
+        const val OLD_PREFIX = "caw:1:"
 
         fun decode(text: String): Code? {
             val t = text.trim()
@@ -164,7 +179,7 @@ data class Code(val v: Int, val s: String, val t: String, val a: String, val n: 
                 json.decodeFromString(serializer(), String(java.util.Base64.getUrlDecoder().decode(t.removePrefix(PREFIX))))
             }.getOrNull() ?: return null
             val s = normServer(c.s) ?: return null
-            return c.copy(s = s).takeIf { it.v == 1 && it.t.isNotBlank() && it.a.isNotBlank() }
+            return c.copy(s = s).takeIf { it.v == 2 && it.t.isNotBlank() && it.a.isNotBlank() }
         }
     }
 }
@@ -193,4 +208,5 @@ data class ServerConfig(
     @SerialName("message_ttl_max") val messageTtlMax: Long = 7 * 86400,
     @SerialName("max_upload_mb") val maxUploadMb: Long = 25,
     @SerialName("max_group_members") val maxGroupMembers: Int = 10,
+    @SerialName("pairing_request_hours") val pairingRequestHours: Long = 24,
 )

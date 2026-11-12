@@ -27,6 +27,7 @@ pub async fn config(State(app): State<Arc<App>>) -> Result<Json<serde_json::Valu
         "message_ttl_max": s.message_ttl_max,
         "max_upload_mb": s.max_upload_mb,
         "max_group_members": s.max_group_members,
+        "pairing_request_hours": s.pairing_request_hours,
     })))
 }
 

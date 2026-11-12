@@ -313,3 +313,58 @@ async fn link_responses_are_not_cached() {
     assert_eq!(resp.status(), StatusCode::GONE);
     assert_eq!(resp.headers()["cache-control"], "no-store");
 }
+
+async fn request(s: &Server, owner: &str, wait: i64) -> (String, String, i64) {
+    let (st, v) = req(s, Method::POST, "/api/pairings", Auth::Session(owner), None).await;
+    assert_eq!(st, StatusCode::OK);
+    let body = json!({ "ticket": v["ticket"], "wait": wait, "request": b64(80) });
+    let (st, v) = req(s, Method::POST, "/api/pairings/redeem", Auth::Session(""), Some(body)).await;
+    assert_eq!(st, StatusCode::OK);
+    (v["link_id"].as_str().unwrap().to_string(), v["token"].as_str().unwrap().to_string(), v["expires_at"].as_i64().unwrap())
+}
+
+#[tokio::test]
+async fn pairing_request_states() {
+    let s = server().await;
+    let (alice, device) = account(&s, "alice").await;
+    let (id, token, expires_at) = request(&s, &alice, 30 * 86400).await;
+    assert!((expires_at - now() - 24 * 3600).abs() < 5, "capped at the server's maximum");
+    let link = || Auth::Link(&id, &token);
+
+    let (st, v) = req(&s, Method::GET, "/api/link", link(), None).await;
+    assert_eq!((st, v["state"].as_str()), (StatusCode::OK, Some("pending")));
+    for (m, path) in [(Method::GET, "/api/link/devices"), (Method::GET, "/api/link/mail")] {
+        assert_eq!(req(&s, m, path, link(), None).await.0, StatusCode::FORBIDDEN, "{path} while pending");
+    }
+    assert_eq!(req(&s, Method::POST, "/api/link/mail", link(), Some(mail(&device, &[]))).await.0, StatusCode::FORBIDDEN);
+    let (_, links) = req(&s, Method::GET, "/api/links", Auth::Session(&alice), None).await;
+    let l = &links.as_array().unwrap()[0];
+    assert_eq!((l["state"].as_str(), l["request"].as_str(), l["peer_server"].as_str()), (Some("pending"), Some(b64(80).as_str()), Some("")));
+
+    assert_eq!(req(&s, Method::POST, &format!("/api/links/{id}/accept"), Auth::Session(&alice), None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(req(&s, Method::GET, "/api/link", link(), None).await.1["state"], "accepted");
+    assert_eq!(req(&s, Method::GET, "/api/link/devices", link(), None).await.0, StatusCode::OK);
+    assert_eq!(req(&s, Method::POST, "/api/link/mail", link(), Some(mail(&device, &[]))).await.0, StatusCode::OK);
+    let (_, v) = req(&s, Method::GET, "/api/link", link(), None).await;
+    assert_eq!((v["state"].as_str(), v["expires_at"].as_i64()), (Some("open"), None));
+    let (_, links) = req(&s, Method::GET, "/api/links", Auth::Session(&alice), None).await;
+    assert!(links[0].get("request").is_none());
+}
+
+#[tokio::test]
+async fn pairing_request_withdrawal_and_expiry() {
+    let s = server().await;
+    let (alice, _) = account(&s, "alice").await;
+    let (id, token, expires_at) = request(&s, &alice, 1).await;
+    assert!((expires_at - now() - 60).abs() < 5, "at least a minute");
+    assert_eq!(req(&s, Method::DELETE, "/api/link", Auth::Link(&id, &token), None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(req(&s, Method::GET, "/api/link", Auth::Link(&id, &token), None).await.0, StatusCode::GONE);
+
+    let (id, token, _) = request(&s, &alice, 3600).await;
+    sqlx::query("UPDATE links SET expires_at = ? WHERE id = ?").bind(now() - 1).bind(&id).execute(&s.app.db).await.unwrap();
+    assert_eq!(req(&s, Method::GET, "/api/link", Auth::Link(&id, &token), None).await.0, StatusCode::GONE);
+    assert_eq!(req(&s, Method::POST, &format!("/api/links/{id}/accept"), Auth::Session(&alice), None).await.0, StatusCode::GONE);
+    api::sweep_requests(&s.app).await.unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM links WHERE id = ?").bind(&id).fetch_one(&s.app.db).await.unwrap();
+    assert_eq!(left, 0);
+}

@@ -161,7 +161,11 @@ fun AddContactScreen(onAdded: (Long) -> Unit, onBack: () -> Unit) {
             Column(Modifier.padding(pad).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("Waiting for ${app.repo.name(w.first)} to accept.")
                 Text(w.second.joinToString(" "), style = MaterialTheme.typography.titleLarge)
-                Text("Check that ${app.repo.name(w.first)} sees the same words.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val hours = maxOf(1L, Math.round(((app.repo.contact(w.first)?.s?.expiresAt ?: 0L) - app.repo.serverNow()) / 3600.0))
+                Text(
+                    "Check that ${app.repo.name(w.first)} sees the same words. The request ends in ${if (hours == 1L) "1 hour" else "$hours hours"}.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Button(onClick = { onAdded(w.first) }) { Text("Done") }
             }
             return@Scaffold
@@ -259,15 +263,14 @@ fun ContactPrompts(onOpen: (Long) -> Unit) {
     if (p != null) {
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("${p.card.name} wants to add you") },
+            title = { Text("${p.name.ifBlank { "Someone" }} wants to add you") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(hostOf(p.card.server), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(p.words.joinToString(" "), style = MaterialTheme.typography.titleLarge)
-                    Text("Check that ${p.card.name} sees the same words.")
+                    Text(if (p.name.isBlank()) "Check that they see the same words." else "Check that ${p.name} sees the same words.")
                 }
             },
-            confirmButton = { TextButton(onClick = { scope.launch { onOpen(app.repo.acceptPrompt(p)) } }) { Text("Accept") } },
+            confirmButton = { TextButton(onClick = { scope.launch { app.repo.acceptPrompt(p) } }) { Text("Accept") } },
             dismissButton = { TextButton(onClick = { scope.launch { app.repo.declinePrompt(p) } }) { Text("Decline") } },
         )
         return

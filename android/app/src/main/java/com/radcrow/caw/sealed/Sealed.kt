@@ -114,7 +114,7 @@ data class Plain(
 }
 
 // control messages; never shown as bubbles. group controls do not fit Plain and are read from the json
-val CONTROLS = setOf("hello", "accept", "decline", "timer", "bye", "group_invite", "group_join", "group_decline")
+val CONTROLS = setOf("hello", "timer", "group_invite", "group_join", "group_decline")
 
 fun plainOf(o: JsonObject): Plain? = runCatching { json.decodeFromJsonElement(Plain.serializer(), o) }.getOrNull()
 

@@ -75,6 +75,7 @@ pub enum Out {
         version: i64,
     },
     Devices,
+    Requests,
     Sent {
         contact: String,
     },

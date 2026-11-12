@@ -19,6 +19,8 @@ export interface Contact {
   created_at: number
   ttl?: number
   words?: string[]
+  // seconds; when a pending request ends
+  expires_at?: number
   // ms; last writer wins on merge
   updated_at: number
   // device-local: route id and reachability state
@@ -77,14 +79,17 @@ export function wsBase(server: string): string {
 
 // payload of a QR or pasted pairing code
 export interface Code {
-  v: 1
+  v: 2
   s: string
   t: string
   a: string
   n: string
+  // the account's request key, which seals the requester's name
+  k?: string
 }
 
-const PREFIX = 'caw:1:'
+const PREFIX = 'caw:2:'
+export const OLD_PREFIX = 'caw:1:'
 
 export function encodeCode(c: Code): string {
   return PREFIX + b64(new TextEncoder().encode(JSON.stringify(c)) as Uint8Array<ArrayBuffer>)
@@ -96,7 +101,7 @@ export function decodeCode(text: string): Code | null {
   try {
     const c = JSON.parse(new TextDecoder().decode(unb64(t.slice(PREFIX.length)))) as Code
     const s = typeof c.s === 'string' ? normServer(c.s) : null
-    return c.v === 1 && s && c.t && c.a ? { ...c, s } : null
+    return c.v === 2 && s && c.t && c.a ? { ...c, s } : null
   } catch {
     return null
   }

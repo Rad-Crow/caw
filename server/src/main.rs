@@ -164,6 +164,7 @@ async fn sweeper(app: Arc<App>) {
                 app.hub.send_user(*user, &hub::Out::Devices);
             }
             api::sweep_blobs(&app).await?;
+            api::sweep_requests(&app).await?;
             sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&app.db).await?;
             anyhow::Ok(())
         }

@@ -28,6 +28,7 @@ class PushServiceImpl : PushService() {
             }
             "cancel" -> msg.str("call_id")?.let { app.calls.dismiss(it) }
             "mail" -> if (!app.socket.connected.value) app.repo.onPushMessage()
+            "request" -> app.repo.onPushRequest()
         }
     }
 
