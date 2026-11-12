@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -115,7 +116,7 @@ fun NewGroupScreen(group: Long?, onDone: (Long?) -> Unit, onBack: () -> Unit) {
         },
     ) { pad ->
         LazyColumn(
-            Modifier.padding(pad).fillMaxSize().imePadding(),
+            Modifier.padding(pad).consumeWindowInsets(pad).fillMaxSize().imePadding(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
