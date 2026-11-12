@@ -357,6 +357,33 @@ await b.waitForFunction(() => document.querySelector('.media video')?.readyState
 const vmeta = await vid.evaluate((el) => [el.videoWidth, el.videoHeight, Math.round(el.duration)])
 step(`video sent (${vinfo.replace(/\s+/g, ' ').trim()}), plays on the other side at ${vmeta[0]}x${vmeta[1]}${vlog.length ? ', ' + vlog.join(' ') : ''}`)
 
+// fixtures from testdata/media: gps, camera and encoder tags that must not reach the other side
+const received = (el, marks) => fetch(el.src).then(async (r) => {
+  const t = new TextDecoder('latin1').decode(await r.arrayBuffer())
+  return { found: marks.filter((m) => t.includes(m)), vp9: t.includes('vp09') }
+})
+const sendFixture = async (file, kind, text) => {
+  await a.locator('.composer input[type=file]').setInputFiles(`/media/${file}`)
+  await a.locator('.attachment', { hasText: kind }).waitFor({ timeout: 60000 })
+  await a.getByPlaceholder('Message to Bob').fill(text)
+  await a.keyboard.press('Enter')
+  await a.locator('.attachment').waitFor({ state: 'detached' })
+  return b.locator('.msg', { hasText: text })
+}
+const exifMsg = await sendFixture('location.jpg', /Photo/, 'photo with exif')
+const exifImg = exifMsg.locator('.media img:not(.blur)')
+await exifImg.waitFor({ timeout: 15000 })
+const photoLeft = await exifImg.evaluate(received, ['Exif', 'EXIF', 'CawTest', 'Lavc'])
+if (photoLeft.found.length) throw new Error(`photo kept metadata: ${photoLeft.found}`)
+// the test browser cannot decode H.264 or AAC, nor encode H.264, so this video is remuxed
+const gpsMsg = await sendFixture('location-vp9.mp4', /Video/, 'video with a location')
+await gpsMsg.locator('.media-btn[aria-label="Play video"]').click()
+const gpsVid = gpsMsg.locator('.media video')
+await gpsVid.waitFor({ timeout: 15000 })
+const videoLeft = await gpsVid.evaluate(received, ['+40.6892-074.0445/', '\xA9xyz', 'Lavf'])
+if (videoLeft.found.length) throw new Error(`video kept metadata: ${videoLeft.found}`)
+step(`photo and video metadata dropped before sending (video ${videoLeft.vp9 ? 'remuxed' : 'transcoded'})`)
+
 await a.getByRole('button', { name: 'Call', exact: true }).click()
 await b.getByRole('button', { name: 'Answer' }).waitFor({ timeout: 5000 })
 await b.screenshot({ path: '/out/incoming.png' })

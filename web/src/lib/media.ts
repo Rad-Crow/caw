@@ -16,6 +16,7 @@ import {
 import { ApiError } from './api'
 import { Gone, linkAuth, Unreachable, type Remote } from './contacts'
 import { aesGcm, b64, concat, random, unb64, type Bytes } from './crypto'
+import { remux } from './remux'
 
 export type MediaPlain = {
   t: 'media'
@@ -114,6 +115,8 @@ async function transcode(file: Blob, short: number, quality: Quality, onProgress
       tracks: 'primary',
       video: { ...size, codec: 'avc', quality, forceTranscode: true },
       audio: { codec: aac ? 'aac' : 'opus', quality: QUALITY_LOW, numberOfChannels: 1 },
+      // without this the source's tags, location included, are copied
+      tags: {},
     })
     if (!conv.isValid) return null
     conv.onProgress = onProgress
@@ -157,8 +160,9 @@ async function prepareVideo(file: File, limit: number, onProgress: (p: number) =
     out = await transcode(file, short, q, (p) => onProgress((i + p) / steps.length))
     if (!out || out.size <= limit) break
   }
-  // fall back to the original if transcoding failed or an mp4 original is smaller
-  if (!out || (out.size > file.size && file.type === 'video/mp4')) out = file
+  // fall back to the original, remuxed without its metadata, if transcoding failed or an mp4 original is smaller
+  if (!out || (out.size > file.size && file.type === 'video/mp4')) out = (await remux(file)) ?? out
+  if (!out) throw new Error('Could not process the video.')
   if (out.size > limit) throw new TooLarge()
   const info = await videoInfo(out)
   return { kind: 'video', mime: out.type || 'video/mp4', data: await bytesOf(out), ...info, preview: URL.createObjectURL(out) }
