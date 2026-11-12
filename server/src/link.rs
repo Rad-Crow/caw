@@ -17,6 +17,8 @@ pub struct Link {
     pub id: String,
     pub user_id: i64,
     pub group: bool,
+    pub state: String,
+    pub expires_at: Option<i64>,
 }
 
 impl Link {
@@ -37,6 +39,8 @@ struct Row {
     kind: String,
     prev_token_hash: Option<String>,
     prev_until: Option<i64>,
+    state: String,
+    expires_at: Option<i64>,
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -62,14 +66,16 @@ fn credential(parts: &Parts) -> Option<String> {
 pub async fn authenticate(app: &App, cred: &str) -> Result<Link> {
     let (id, token) = cred.split_once('.').ok_or(AppError::Unauthorized)?;
     let row: Option<Row> =
-        sqlx::query_as("SELECT id, user_id, token_hash, kind, prev_token_hash, prev_until FROM links WHERE id = ?")
+        sqlx::query_as("SELECT id, user_id, token_hash, kind, prev_token_hash, prev_until, state, expires_at FROM links WHERE id = ?")
             .bind(id)
             .fetch_optional(&app.db)
             .await?;
     // unknown ids also return 410, so absent and removed links are indistinguishable
-    let row = row.ok_or_else(|| AppError::Gone("This contact is no longer available.".into()))?;
-    let th = hash_token(token);
     let t = now();
+    let row = row
+        .filter(|r| r.expires_at.is_none_or(|e| e > t))
+        .ok_or_else(|| AppError::Gone("This contact is no longer available.".into()))?;
+    let th = hash_token(token);
     let previous = row.prev_token_hash.is_some_and(|p| same(&th, &p)) && row.prev_until.is_some_and(|u| u > t);
     if !same(&th, &row.token_hash) && !previous {
         return Err(AppError::Unauthorized);
@@ -84,15 +90,32 @@ pub async fn authenticate(app: &App, cred: &str) -> Result<Link> {
         group: row.kind == "group",
         id: row.id,
         user_id: row.user_id,
+        state: row.state,
+        expires_at: row.expires_at,
     })
+}
+
+// any link, including a pairing request its owner has not accepted; that one only reports its state and can be withdrawn
+pub struct AnyLink(pub Link);
+
+impl FromRequestParts<Arc<App>> for AnyLink {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, app: &Arc<App>) -> Result<Self> {
+        let cred = credential(parts).ok_or(AppError::Unauthorized)?;
+        Ok(AnyLink(authenticate(app, &cred).await?))
+    }
 }
 
 impl FromRequestParts<Arc<App>> for Link {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, app: &Arc<App>) -> Result<Self> {
-        let cred = credential(parts).ok_or(AppError::Unauthorized)?;
-        authenticate(app, &cred).await
+        let AnyLink(link) = AnyLink::from_request_parts(parts, app).await?;
+        if link.state == "pending" {
+            return Err(AppError::Forbidden("This request has not been accepted.".into()));
+        }
+        Ok(link)
     }
 }
 

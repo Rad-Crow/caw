@@ -62,6 +62,7 @@
         message_ttl_max: settings!.message_ttl_max,
         max_upload_mb: settings!.max_upload_mb,
         max_group_members: settings!.max_group_members,
+        pairing_request_hours: settings!.pairing_request_hours,
       }
       document.title = settings!.server_name
     }, 'Settings saved')
@@ -149,6 +150,9 @@
         </label>
         <label>Pairing code expiry (minutes)
           <input type="number" min="1" max="1440" bind:value={settings.pairing_code_minutes} required />
+        </label>
+        <label>Contact request length (hours)
+          <input type="number" min="1" max="720" bind:value={settings.pairing_request_hours} required />
         </label>
         <label>Attachment limit (MB)
           <input type="number" min="1" max="500" bind:value={settings.max_upload_mb} required />

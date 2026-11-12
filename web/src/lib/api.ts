@@ -23,6 +23,7 @@ export interface Settings {
   max_upload_mb: number
   device_expiry_days: number
   pairing_code_minutes: number
+  pairing_request_hours: number
   max_group_members: number
 }
 

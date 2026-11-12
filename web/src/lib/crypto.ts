@@ -97,11 +97,46 @@ export async function groupToken(secret: Bytes, gen: number): Promise<string> {
 }
 
 export async function groupMessageId(secret: Bytes, trigger: string, member: string): Promise<string> {
-  const h = (await hmac(secret, concat(GROUP_ID, te.encode(trigger), Uint8Array.of(0), te.encode(member)))).slice(0, 16)
+  return uuid8((await hmac(secret, concat(GROUP_ID, te.encode(trigger), Uint8Array.of(0), te.encode(member)))).slice(0, 16))
+}
+
+function uuid8(h: Bytes): string {
   h[6] = (h[6] & 0x0f) | 0x80
   h[8] = (h[8] & 0x3f) | 0x80
   const x = Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('')
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`
+}
+
+const derivedId = async (label: string, linkId: string) => uuid8(bytes(await subtle.digest('SHA-256', te.encode(label + linkId))).slice(0, 16))
+
+// every device of the requester sends the hello under this id, so only the first is stored
+export const helloId = (linkId: string) => derivedId('caw-hello-v1', linkId)
+
+// every device of the account that accepted stores the contact under this id
+export const requestContactId = (linkId: string) => derivedId('caw-contact-v1', linkId)
+
+const REQUEST_INFO = te.encode('caw-request-v1')
+const PKCS8_X25519 = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x04, 0x22, 0x04, 0x20])
+
+// derived from the data key, so every device of the account opens requests made with its codes
+export async function requestKey(dataKey: Bytes): Promise<{ priv: CryptoKey; pub: Bytes }> {
+  const sk = await expand(await hmac(EMPTY, dataKey), te.encode('caw-request-key-v1'), 32)
+  const priv = await subtle.importKey('pkcs8', concat(PKCS8_X25519, sk), { name: 'X25519' }, true, ['deriveBits'])
+  const { x } = await subtle.exportKey('jwk', priv)
+  return { priv, pub: unb64(x!) }
+}
+
+export async function sealRequest(k: Bytes, name: string): Promise<string> {
+  return b64(await hpkeSeal(k, REQUEST_INFO, EMPTY, te.encode(JSON.stringify({ name }))))
+}
+
+export async function openRequest(key: { priv: CryptoKey; pub: Bytes }, request: string): Promise<string | null> {
+  try {
+    const p = JSON.parse(new TextDecoder().decode(await hpkeOpen(key.priv, key.pub, unb64(request), REQUEST_INFO, EMPTY)))
+    return typeof p?.name === 'string' && p.name.trim() ? p.name.trim().slice(0, 64) : null
+  } catch {
+    return null
+  }
 }
 
 export async function membershipDigest(list: string): Promise<string> {

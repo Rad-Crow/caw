@@ -143,12 +143,28 @@ object Crypto {
     // see docs/protocol.md, section 9
     fun groupToken(secret: ByteArray, gen: Long): String = b64(hmac(secret, concat("caw-group-token-v1".toByteArray(), i2osp(gen, 8))))
 
-    fun groupMessageId(secret: ByteArray, trigger: String, member: String): String {
-        val h = hmac(secret, concat("caw-group-id-v1".toByteArray(), trigger.toByteArray(), byteArrayOf(0), member.toByteArray())).copyOf(16)
+    fun groupMessageId(secret: ByteArray, trigger: String, member: String): String =
+        uuid8(hmac(secret, concat("caw-group-id-v1".toByteArray(), trigger.toByteArray(), byteArrayOf(0), member.toByteArray())).copyOf(16))
+
+    private fun uuid8(h: ByteArray): String {
         h[6] = ((h[6].toInt() and 0x0f) or 0x80).toByte()
         h[8] = ((h[8].toInt() and 0x3f) or 0x80).toByte()
         val x = buildString { for (b in h) append(HEX[(b.toInt() shr 4) and 15]).append(HEX[b.toInt() and 15]) }
         return "${x.substring(0, 8)}-${x.substring(8, 12)}-${x.substring(12, 16)}-${x.substring(16, 20)}-${x.substring(20)}"
+    }
+
+    // see docs/protocol.md, section 6.3: every device of the requester sends the hello under this id, so only the first is stored
+    fun helloId(linkId: String) = uuid8(sha256("caw-hello-v1$linkId".toByteArray()).copyOf(16))
+
+    // every device of the account that accepted stores the contact under this id
+    fun requestContactId(linkId: String) = uuid8(sha256("caw-contact-v1$linkId".toByteArray()).copyOf(16))
+
+    val REQUEST_INFO = "caw-request-v1".toByteArray()
+
+    // (private, public); derived from the data key, so every device of the account opens requests made with its codes
+    fun requestKey(dataKey: ByteArray): Pair<ByteArray, ByteArray> {
+        val sk = expand(hmac(ByteArray(32), dataKey), "caw-request-key-v1".toByteArray(), 32)
+        return sk to X25519PrivateKeyParameters(sk, 0).generatePublicKey().encoded
     }
 
     fun membershipDigest(list: String): String = b64(sha256(list.toByteArray()).copyOf(16))

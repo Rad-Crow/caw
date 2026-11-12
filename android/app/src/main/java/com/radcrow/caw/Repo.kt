@@ -42,6 +42,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import java.io.IOException
 import java.text.Collator
@@ -74,7 +75,8 @@ data class CawEvent(val at: Double, val text: String)
 data class Attachment(val status: String, val progress: Float, val prepared: Prepared? = null)
 
 // pairing request from someone who redeemed this account's code
-data class Prompt(val linkId: String, val card: Card, val words: List<String>)
+// a pairing request: the name is the requester's own claim
+data class Prompt(val linkId: String, val name: String, val words: List<String>, val expiresAt: Long)
 
 data class GroupPrompt(val contact: String, val from: String, val g: String, val name: String, val members: List<String>, val inviter: String, val member: String)
 
@@ -216,6 +218,7 @@ class Repo(private val app: CawApp) {
             while (true) {
                 delay(5000)
                 expire()
+                if (app.visible) launch { runCatching { checkRequests() } }
                 // hourly, so a long-running process keeps up with daily key rotation
                 if (++tick % 720 == 0 && me.value != null) runCatching { refreshKeys() }
                 if (tick % 3 == 0 && outbox.value.isNotEmpty()) runCatching { flush() }
@@ -613,7 +616,7 @@ class Repo(private val app: CawApp) {
         val links = app.api.myLinks()
         val have = links.map { it.id }.toSet()
         groupLinks = links.filter { it.kind == "group" }.map { it.id }.toSet()
-        for (c in contacts.value.toList()) if (c.inLink !in have) forget(c, "${name(c.num)} is no longer a contact.")
+        for (c in contacts.value.toList()) if (c.inLink.isNotEmpty() && c.inLink !in have) forget(c, "${name(c.num)} is no longer a contact.")
         for (g in groups.value.toList()) if (g.g.own.linkId !in have) forgetGroup(g.g.id, "You are no longer in ${g.g.name.v}.")
     }
 
@@ -650,7 +653,7 @@ class Repo(private val app: CawApp) {
     // also asks the contact's server to revoke the inbound link; not enforceable
     suspend fun removeContact(num: Long) {
         val c = contact(num) ?: return
-        runCatching { app.api.revokeLink(c.inLink) }
+        if (c.inLink.isNotEmpty()) runCatching { app.api.revokeLink(c.inLink) }
         app.scope.launch { runCatching { app.api.linkDrop(c) } }
         forget(c)
     }
@@ -747,90 +750,175 @@ class Repo(private val app: CawApp) {
 
     // --- pairing
 
+    @Volatile private var reqKey: Pair<ByteArray, Pair<ByteArray, ByteArray>>? = null
+    private val checkLock = Mutex()
+    private val lastCheck = HashMap<String, Long>()
+
+    // derived from the data key, which can be replaced
+    private fun requestKey(): Pair<ByteArray, ByteArray>? {
+        val k = dataKey ?: return null
+        reqKey?.takeIf { it.first === k }?.let { return it.second }
+        return Crypto.requestKey(k).also { reqKey = k to it }
+    }
+
     suspend fun showCode(): Pair<String, Long> {
         app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
         val p = app.api.createPairing()
         val user = me.value!!
-        val code = Code(1, ownServer(), p.ticket, user.id.toString(), user.displayName)
+        val code = Code(2, ownServer(), p.ticket, user.id.toString(), user.displayName, requestKey()?.let { Crypto.b64(it.second) })
         return code.encode() to p.expiresAt
     }
 
-    // scanning side: opens a link for them, redeems their ticket, then sends a hello through it
+    // requesting side: only the ticket and a name go out; the link, card and keys follow once they accept
     suspend fun enterCode(text: String): Pair<Long, List<String>> {
         app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
+        if (text.trim().startsWith(Code.OLD_PREFIX)) throw IOException("This code is from an older version of Caw. Ask them to update the app.")
         val code = Code.decode(text) ?: throw IOException("That isn't a Caw code.")
-        val own = ownServer()
         val user = me.value!!
-        val account = user.id.toString()
-        val server = code.s
-        if (server == own && code.a == account) throw IOException("That's your own code.")
-        if (contacts.value.any { it.s.account == code.a && normServer(it.server) == server }) throw IOException("Already a contact.")
-        val mine = app.api.createLink(server, code.a)
-        val out = try {
-            app.api.redeem(server, code.t, own, account)
-        } catch (e: IOException) {
-            runCatching { app.api.revokeLink(mine.linkId) }
-            throw e
+        if (code.s == ownServer() && code.a == user.id.toString()) throw IOException("That's your own code.")
+        if (contacts.value.any { it.s.account == code.a && normServer(it.server) == code.s }) throw IOException("Already a contact.")
+        val request = code.k?.let { k ->
+            val name = buildJsonObject { put("name", user.displayName) }.toString().toByteArray()
+            runCatching { Crypto.b64(Crypto.hpkeSeal(Crypto.unb64(k), Crypto.REQUEST_INFO, ByteArray(0), name)) }.getOrNull()
         }
-        val words = app.sealed.words(out.linkId)
+        val r = app.api.redeem(code.s, code.t, config.value.pairingRequestHours * 3600, request)
+        val words = app.sealed.words(r.linkId)
         val s = Synced(
-            UUID.randomUUID().toString(), code.n.ifBlank { "Contact" }, server = server, account = code.a, out = out,
-            inLink = mine.linkId, status = "pending", createdAt = serverNow(), words = words, updatedAt = stamp(),
-        )
-        val c = Contact(s, nextNum())
-        val card = Card(own, account, user.displayName, mine.linkId, mine.token)
-        try {
-            postControl(c, Plain("hello", card = card).toJson())
-        } catch (e: IOException) {
-            peers.remove(c.id)
-            runCatching { app.api.revokeLink(mine.linkId) }
-            app.scope.launch { runCatching { app.api.linkDrop(c) } }
-            throw when (e) {
-                is Gone -> IOException("This code has expired or was already used.")
-                is Unreachable -> IOException("Can't reach that server.")
-                else -> e
-            }
-        }
-        // kept to verify their reply: a decline revokes the link their keys are read through
-        val signers = peers[c.id]?.second.orEmpty().associate { it.id to it.signPub }
-        setContacts(contacts.value + c.copy(signers = signers))
-        schedulePush()
-        return c.num to words
-    }
-
-    // placeholder contact for a pending pairing
-    private fun remote(card: Card) = Contact(
-        Synced("", card.name, server = card.server, account = card.account, out = LinkCred(card.linkId, card.token), inLink = "", status = "pending", createdAt = 0, updatedAt = 0),
-        0,
-    )
-
-    private suspend fun maybeHello(m: Mail) {
-        if (prompts.value.any { it.linkId == m.linkId }) return
-        val card = app.sealed.openHello(m)?.let { h -> normServer(h.server)?.let { h.copy(server = it) } } ?: return
-        val devices = runCatching { peerDevices(remote(card)) }.getOrNull() ?: return
-        if (!app.sealed.signedBy(m, devices.associate { it.id to it.signPub })) return
-        if (prompts.value.any { it.linkId == m.linkId } || contacts.value.any { it.inLink == m.linkId }) return
-        prompts.update { it + Prompt(m.linkId, card, app.sealed.words(m.linkId)) }
-    }
-
-    suspend fun acceptPrompt(p: Prompt): Long {
-        prompts.update { l -> l.filter { it.linkId != p.linkId } }
-        val s = remote(p.card).s.copy(
-            id = UUID.randomUUID().toString(), name = p.card.name.ifBlank { "Contact" }, inLink = p.linkId, status = "active",
-            createdAt = serverNow(), words = p.words, updatedAt = stamp(),
+            UUID.randomUUID().toString(), code.n.ifBlank { "Contact" }, server = code.s, account = code.a, out = LinkCred(r.linkId, r.token),
+            inLink = "", status = "pending", createdAt = serverNow(), words = words, expiresAt = r.expiresAt, updatedAt = stamp(),
         )
         val c = Contact(s, nextNum())
         setContacts(contacts.value + c)
         schedulePush()
-        addEvent(c.num, "Contact added.")
-        app.scope.launch { runCatching { postControl(c, Plain("accept").toJson()) }.onFailure { sendFailed(c, it) } }
-        return c.num
+        return c.num to words
+    }
+
+    fun onForeground() = app.scope.launch { runCatching { checkRequests(now = true) } }
+
+    // the answer is read from their server: often while a request is new, when they may be accepting in person
+    private suspend fun checkRequests(now: Boolean = false) {
+        if (app.sealed.device == null || !app.visible || !checkLock.tryLock()) return
+        try {
+            val t = serverNow()
+            val due = contacts.value.filter { c ->
+                c.status == "pending" && c.inLink.isEmpty() && (now || t - (lastCheck[c.id] ?: 0) >= if (t - c.s.createdAt < 300) 5 else 30)
+            }
+            for (c in due) {
+                lastCheck[c.id] = t
+                val state = try {
+                    app.api.linkState(c).state
+                } catch (e: Gone) {
+                    forget(c, "${name(c.num)} didn't accept.")
+                    continue
+                } catch (e: IOException) {
+                    continue
+                }
+                val cur = contact(c.num)?.takeIf { it.status == "pending" && it.inLink.isEmpty() } ?: continue
+                runCatching {
+                    when (state) {
+                        "accepted" -> completeRequest(cur)
+                        "open" -> adoptHello(cur)
+                    }
+                }.onFailure { Log.w(TAG, "request", it) }
+            }
+        } finally {
+            checkLock.unlock()
+        }
+    }
+
+    // the first of the account's devices to deliver the hello wins; the others drop their link and read its card back
+    private suspend fun completeRequest(c: Contact) {
+        val user = me.value ?: return
+        val mine = app.api.createLink(c.server, c.s.account)
+        val card = Card(ownServer(), user.id.toString(), user.displayName, mine.linkId, mine.token)
+        val sent = try {
+            deliver(c, config.value.messageTtlMax, Plain("hello", card = card).toJson(), Crypto.helloId(c.out.linkId))
+        } catch (e: IOException) {
+            runCatching { app.api.revokeLink(mine.linkId) }
+            if (e is Gone) forget(c, "${name(c.num)} didn't accept.")
+            return
+        }
+        if (sent == null) {
+            runCatching { app.api.revokeLink(mine.linkId) }
+            return adoptHello(c)
+        }
+        activate(c, mine.linkId)
+    }
+
+    private suspend fun adoptHello(c: Contact) {
+        val id = Crypto.helloId(c.out.linkId)
+        val m = app.api.linkMail(c).mail.find { it.id == id } ?: return
+        if (m.fromDevice !in known) runCatching { refreshDevices() }
+        val card = app.sealed.openMail(m, ownSigners())?.let(::plainOf)?.takeIf { it.t == "hello" }?.card ?: return
+        activate(c, card.linkId)
+    }
+
+    private fun activate(c: Contact, inLink: String) {
+        val cur = contact(c.num)?.takeIf { it.inLink.isEmpty() } ?: return
+        touch(cur.num) { it.copy(inLink = inLink, status = "active", expiresAt = null) }
+        addEvent(cur.num, "Contact added.")
+        toast("${name(cur.num)} accepted.")
+        app.scope.launch { runCatching { contact(cur.num)?.let { peerDevices(it, fresh = true) } } }
+    }
+
+    // pending requests are this account's links, so every device shows the same ones
+    private suspend fun loadRequests() {
+        app.sealed.device ?: return
+        val links = app.api.myLinks()
+        val key = requestKey()
+        val known = prompts.value.associateBy { it.linkId }
+        prompts.value = links.filter { it.state == "pending" && it.kind != "group" }.map { l ->
+            known[l.id] ?: run {
+                val name = l.request?.let { r -> key?.let { (sk, pk) -> openRequest(sk, pk, r) } }.orEmpty()
+                if (!app.visible) Notifications.invitation(app, "New contact", "${name.ifBlank { "Someone" }} wants to add you.")
+                Prompt(l.id, name, app.sealed.words(l.id), l.expiresAt ?: 0)
+            }
+        }
+    }
+
+    private fun openRequest(sk: ByteArray, pk: ByteArray, request: String): String? = runCatching {
+        val o = json.parseToJsonElement(String(Crypto.hpkeOpen(sk, pk, Crypto.unb64(request), Crypto.REQUEST_INFO, ByteArray(0)))).jsonObject
+        o.str("name")?.trim()?.take(64)?.ifBlank { null }
+    }.getOrNull()
+
+    fun onPushRequest() = app.scope.launch {
+        if (me.value == null) return@launch
+        runCatching { loadRequests() }.onFailure { Log.w(TAG, "push requests", it) }
+    }
+
+    suspend fun acceptPrompt(p: Prompt) {
+        prompts.update { l -> l.filter { it.linkId != p.linkId } }
+        try {
+            app.api.acceptRequest(p.linkId)
+            toast("Accepted. ${p.name.ifBlank { "The contact" }} is added once their app connects.")
+        } catch (e: IOException) {
+            toast(e.message ?: "Couldn't accept.")
+        }
     }
 
     suspend fun declinePrompt(p: Prompt) {
         prompts.update { l -> l.filter { it.linkId != p.linkId } }
-        runCatching { postControl(remote(p.card), Plain("decline").toJson()) }
         runCatching { app.api.revokeLink(p.linkId) }
+    }
+
+    // a contact link with no contact carries the hello of a request this account accepted
+    private suspend fun takeHello(m: Mail) {
+        if (contacts.value.any { it.inLink == m.linkId }) return
+        val card = app.sealed.openHello(m)?.let { h -> normServer(h.server)?.let { h.copy(server = it) } } ?: return
+        val id = Crypto.requestContactId(m.linkId)
+        if (id in gone || contacts.value.any { it.id == id }) return
+        val s = Synced(
+            id, card.name.ifBlank { "Contact" }, server = card.server, account = card.account, out = LinkCred(card.linkId, card.token),
+            inLink = m.linkId, status = "active", createdAt = m.createdAt, words = app.sealed.words(m.linkId), updatedAt = m.createdAt * 1000,
+        )
+        val signers = runCatching { peerDevices(Contact(s, 0)) }.getOrNull()?.associate { it.id to it.signPub } ?: return
+        if (!app.sealed.signedBy(m, signers) || contacts.value.any { it.id == id || it.inLink == m.linkId }) return
+        val c = Contact(s, nextNum(), signers = signers)
+        prompts.update { l -> l.filter { it.linkId != m.linkId } }
+        setContacts(contacts.value + c)
+        schedulePush()
+        addEvent(c.num, "Contact added.")
+        if (!app.visible) Notifications.invitation(app, "New contact", "${c.name} was added.")
     }
 
     fun words(num: Long): List<String> = contact(num)?.s?.words.orEmpty()
@@ -867,7 +955,7 @@ class Repo(private val app: CawApp) {
             if (c == null) {
                 val g = groups.value.find { it.g.own.linkId == m.linkId }
                 if (g != null) byGroup.getOrPut(g.g.id) { mutableListOf() } += m
-                else if (m.linkId !in groupLinks) maybeHello(m)
+                else if (m.linkId !in groupLinks) takeHello(m)
                 continue
             }
             val raw = openFrom(c, m)
@@ -952,7 +1040,7 @@ class Repo(private val app: CawApp) {
             val g = groups.value.find { it.g.own.linkId == m.linkId }
             if (g != null) return takeGroupMail(g.g.id, m)
             if (m.linkId in groupLinks) return
-            return maybeHello(m)
+            return takeHello(m)
         }
         if (messages.value[c.num]?.any { it.raw.id == m.id } == true) return
         val raw = openFrom(c, m)
@@ -974,19 +1062,6 @@ class Repo(private val app: CawApp) {
         val who = name(c.num)
         val at = m.createdAt * 1000
         when (raw.string("t")) {
-            "accept" -> if (c.status == "pending") {
-                touch(c.num, at) { it.copy(status = "active") }
-                addEvent(c.num, "Contact added.")
-                if (live) toast("$who accepted.")
-            }
-            "decline" -> {
-                app.scope.launch { runCatching { app.api.revokeLink(c.inLink) } }
-                forget(c, "$who declined.")
-            }
-            "bye" -> {
-                app.scope.launch { runCatching { app.api.revokeLink(c.inLink) } }
-                forget(c, "$who is no longer a contact.")
-            }
             "timer" -> {
                 val ttl = plainOf(raw)?.ttl ?: return
                 if (c.ttl == ttl) return
@@ -1023,10 +1098,11 @@ class Repo(private val app: CawApp) {
         val t = serverNow()
         clock.value = t
         if (outbox.value.isNotEmpty()) dropStale()
-        for (c in contacts.value.filter { it.status == "pending" && it.s.createdAt + PENDING_SECS < t }) {
-            app.scope.launch { runCatching { app.api.revokeLink(c.inLink) } }
+        for (c in contacts.value.filter { it.status == "pending" && (it.s.expiresAt ?: (it.s.createdAt + PENDING_SECS)) < t }) {
+            if (c.inLink.isNotEmpty()) app.scope.launch { runCatching { app.api.revokeLink(c.inLink) } }
             forget(c, "${name(c.num)} didn't accept in time.")
         }
+        if (prompts.value.any { it.expiresAt in 1..t }) prompts.update { l -> l.filter { it.expiresAt == 0L || it.expiresAt > t } }
         val before = messages.value
         val after = before.mapValues { (_, l) -> l.filter { it.raw.expiresAt > t } }.filterValues { it.isNotEmpty() }
         if (after.size == before.size && after.values.sumOf { it.size } == before.values.sumOf { it.size }) return
@@ -2049,6 +2125,8 @@ class Repo(private val app: CawApp) {
                     runCatching { pullVault() }
                     runCatching { refreshDevices() }
                     runCatching { flush() }
+                    runCatching { loadRequests() }
+                    runCatching { checkRequests(now = true) }
                 }
                 app.calls.handle(e)
             }
@@ -2062,9 +2140,11 @@ class Repo(private val app: CawApp) {
             }
             "vault" -> if ((e.long("version") ?: 0) > vaultVersion) app.scope.launch { runCatching { pullVault() } }
             "devices" -> app.scope.launch { runCatching { refreshDevices() } }
+            "requests" -> app.scope.launch { runCatching { loadRequests() } }
             "link_removed" -> {
-                val c = contacts.value.find { it.inLink == e.str("link_id") } ?: return
-                app.scope.launch { runCatching { app.api.linkDrop(c) } }
+                val id = e.str("link_id")
+                prompts.update { p -> p.filter { it.linkId != id } }
+                val c = contacts.value.find { it.inLink == id } ?: return
                 forget(c, "${name(c.num)} is no longer a contact.")
             }
             "link_revoked" -> {

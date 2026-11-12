@@ -1,8 +1,8 @@
 import wordsRaw from '../../../protocol/words.txt?raw'
 import { api, ApiError, fmtTtl, type Me, type Peer } from './api'
 import { calls, type CallEnd } from './call.svelte'
-import { decodeCode, encodeCode, Gone, hostOf, linkReq, Unreachable, wsBase, type Contact, type Remote } from './contacts'
-import { b64, callSigBytes, groupMessageId, groupToken, membershipDigest, pairingWords, random, sign, unb64, verify, type Bytes } from './crypto'
+import { decodeCode, encodeCode, Gone, hostOf, linkReq, OLD_PREFIX, Unreachable, wsBase, type Contact, type Remote } from './contacts'
+import { b64, callSigBytes, groupMessageId, groupToken, helloId, membershipDigest, openRequest, pairingWords, random, requestContactId, requestKey, sealRequest, sign, unb64, verify, type Bytes } from './crypto'
 import {
   certOk,
   ensureDevice,
@@ -72,10 +72,12 @@ export interface CawEvent {
   text: string
 }
 
+// a pairing request: the name is the requester's own claim
 export interface Prompt {
   link_id: string
-  card: Card
+  name: string
   words: string[]
+  expires_at: number
 }
 
 export type LocalGroup = Group & { num: number; u: number; names?: Record<string, string>; signers?: Record<string, Record<string, string>> }
@@ -116,6 +118,7 @@ interface Config {
   message_ttl_max: number
   max_upload_mb: number
   max_group_members: number
+  pairing_request_hours: number
 }
 
 export type Attachment = { status: 'preparing' | 'ready' | 'sending'; progress: number; prepared?: Prepared }
@@ -138,7 +141,7 @@ function writeLocal(key: string, v: unknown) {
 }
 
 const isControl = (p: Plain) =>
-  p.t === 'hello' || p.t === 'accept' || p.t === 'decline' || p.t === 'timer' || p.t === 'bye' || p.t === 'group_invite' || p.t === 'group_join' || p.t === 'group_decline'
+  p.t === 'hello' || p.t === 'timer' || p.t === 'group_invite' || p.t === 'group_join' || p.t === 'group_decline'
 
 // never accepted through a contact link
 const isGroupContent = (p: Plain) => p.t === 'group' || ((p.t === 'text' || p.t === 'media') && p.g !== undefined)
@@ -195,6 +198,7 @@ class Store {
     message_ttl_max: 604800,
     max_upload_mb: 25,
     max_group_members: 10,
+    pairing_request_hours: 24,
   })
   contacts = $state<Contact[]>([])
   groups = $state<LocalGroup[]>([])
@@ -238,6 +242,9 @@ class Store {
   private contactsSave: Promise<void> = Promise.resolve()
   private flushing = false
   private dataKey: Bytes | null = null
+  private reqKey: { from: Bytes; key: Promise<{ priv: CryptoKey; pub: Bytes }> } | null = null
+  private checking = false
+  private lastCheck: Record<string, number> = {}
   // key from before a rotation, to merge a copy written concurrently by another device
   private prevKey: Bytes | null = null
   private pending: Secret | null = null
@@ -290,8 +297,10 @@ class Store {
     })
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && this.selected !== null) this.markSeen(this.selected)
+      if (!document.hidden) this.checkRequests(true).catch(() => {})
     })
     window.setInterval(() => this.expire(), 5000)
+    window.setInterval(() => this.checkRequests().catch(() => {}), 5000)
     window.setInterval(() => this.refreshKeys(), 3600_000)
     window.setInterval(() => this.outbox.length && this.flush(), 15_000)
     window.addEventListener('online', () => this.flush())
@@ -852,7 +861,7 @@ class Store {
     const have = new Set(links.map((l) => l.id))
     this.groupLinks = new Set(links.filter((l) => l.kind === 'group').map((l) => l.id))
     for (const c of [...this.contacts]) {
-      if (!have.has(c.in)) this.forget(c, `${this.userName(c.num)} is no longer a contact.`)
+      if (c.in && !have.has(c.in)) this.forget(c, `${this.userName(c.num)} is no longer a contact.`)
     }
     for (const g of [...this.groups]) {
       if (!have.has(g.own.link_id)) this.forgetGroup(g, `You are no longer in ${g.name.v}.`)
@@ -893,7 +902,7 @@ class Store {
   async removeContact(num: number) {
     const c = this.contact(num)
     if (!c) return
-    await api.del(`/api/links/${c.in}`).catch(() => {})
+    if (c.in) await api.del(`/api/links/${c.in}`).catch(() => {})
     linkReq(c, 'DELETE', '/api/link').catch(() => {})
     this.forget(c)
   }
@@ -991,117 +1000,188 @@ class Store {
 
   // --- pairing
 
+  // derived from the data key, which can be replaced
+  private requestKey(): Promise<{ priv: CryptoKey; pub: Bytes }> | null {
+    const k = this.dataKey
+    if (!k) return null
+    if (this.reqKey?.from !== k) this.reqKey = { from: k, key: requestKey(k) }
+    return this.reqKey.key
+  }
+
   async showCode(): Promise<{ code: string; expires_at: number }> {
     if (!this.device) throw new Error(this.deviceError ?? 'This device is not set up yet.')
     const r = await api.post<{ ticket: string; expires_at: number }>('/api/pairings')
-    const code = encodeCode({ v: 1, s: location.origin, t: r.ticket, a: String(this.me!.id), n: this.me!.display_name })
+    const key = await this.requestKey()
+    const code = encodeCode({ v: 2, s: location.origin, t: r.ticket, a: String(this.me!.id), n: this.me!.display_name, k: key ? b64(key.pub) : undefined })
     return { code, expires_at: r.expires_at }
   }
 
-  // scanning side: create an inbound link, redeem their ticket, then send a hello through it
+  // requesting side: only the ticket and a name go out; the link, card and keys follow once they accept
   async enterCode(text: string): Promise<number> {
     if (!this.device) throw new Error(this.deviceError ?? 'This device is not set up yet.')
+    if (text.trim().startsWith(OLD_PREFIX)) throw new Error('This code is from an older version of Caw. Ask them to update the app.')
     const code = decodeCode(text)
     if (!code) throw new Error("That isn't a Caw code.")
-    const account = String(this.me!.id)
-    if (code.s === location.origin && code.a === account) throw new Error("That's your own code.")
+    if (code.s === location.origin && code.a === String(this.me!.id)) throw new Error("That's your own code.")
     if (this.contacts.some((c) => c.account === code.a && normServer(c.server) === code.s)) throw new Error('Already a contact.')
-    const mine = await api.post<{ link_id: string; token: string }>('/api/links', { peer_server: code.s, peer_account: code.a })
-    let out: { link_id: string; token: string }
-    try {
-      out = await redeem(code.s, { ticket: code.t, peer_server: location.origin, peer_account: account })
-    } catch (e) {
-      api.del(`/api/links/${mine.link_id}`).catch(() => {})
-      throw e
-    }
+    const request = code.k ? await sealRequest(unb64(code.k), this.me!.display_name).catch(() => undefined) : undefined
+    const r = await redeem(code.s, { ticket: code.t, wait: (this.config.pairing_request_hours ?? 24) * 3600, request })
     const c: Contact = {
       id: crypto.randomUUID(),
       num: this.nextNum(),
       name: code.n || 'Contact',
       server: code.s,
       account: code.a,
-      out,
-      in: mine.link_id,
+      out: { link_id: r.link_id, token: r.token },
+      in: '',
       status: 'pending',
       created_at: this.serverNow(),
-      words: await pairingWords(out.link_id, WORDS),
+      expires_at: r.expires_at,
+      words: await pairingWords(r.link_id, WORDS),
       updated_at: this.stamp(),
     }
-    const card: Card = { server: location.origin, account, name: this.me!.display_name, link_id: mine.link_id, token: mine.token }
-    try {
-      await this.postControl(c, { t: 'hello', card })
-    } catch (e) {
-      this.peers.delete(c.id)
-      api.del(`/api/links/${mine.link_id}`).catch(() => {})
-      linkReq(c, 'DELETE', '/api/link').catch(() => {})
-      throw e instanceof Gone ? new Error('This code has expired or was already used.') : e instanceof Unreachable ? new Error("Can't reach that server.") : e
-    }
-    // kept to verify their reply: a decline revokes the link their keys are read through
-    c.signers = Object.fromEntries((this.peers.get(c.id)?.devices ?? []).map((d) => [d.id, d.sign_pub]))
     this.contacts.push(c)
     this.touch(c)
     return c.num
   }
 
-  private async maybeHello(m: Mail) {
-    if (!this.device || this.prompts.some((p) => p.link_id === m.link_id)) return
-    const hello = await openHello(this.device, m)
-    const server = hello && normServer(hello.server)
-    if (!hello || !server) return
-    const card = { ...hello, server }
-    const remote = this.remote(card)
+  // the answer is read from their server: often while a request is new, when they may be accepting in person
+  private async checkRequests(now = false) {
+    if (this.checking || !this.device || document.hidden) return
+    const t = this.serverNow()
+    const due = (c: Contact) => now || t - (this.lastCheck[c.id] ?? 0) >= (t - c.created_at < 300 ? 5 : 30)
+    const pending = this.contacts.filter((c) => c.status === 'pending' && !c.in && due(c))
+    if (!pending.length) return
+    this.checking = true
     try {
-      const devices = await this.peerDevices(remote)
-      if (!(await signedBy(m, Object.fromEntries(devices.map((d) => [d.id, d.sign_pub]))))) return
-    } catch {
-      return
+      for (const c of pending) {
+        this.lastCheck[c.id] = t
+        let state: string
+        try {
+          state = (await linkReq<{ state: string }>(c, 'GET', '/api/link')).state
+        } catch (e) {
+          if (e instanceof Gone) this.forget(c, `${this.userName(c.num)} didn't accept.`)
+          continue
+        }
+        if (!this.contact(c.num) || c.in) continue
+        if (state === 'accepted') await this.completeRequest(c).catch((e) => console.warn('request', e))
+        else if (state === 'open') await this.adoptHello(c).catch((e) => console.warn('request', e))
+      }
+    } finally {
+      this.checking = false
     }
-    if (this.prompts.some((p) => p.link_id === m.link_id) || this.contacts.some((c) => c.in === m.link_id)) return
-    const words = await pairingWords(m.link_id, WORDS)
-    this.prompts.push({ link_id: m.link_id, card, words })
-    this.notify('New contact', `${card.name} wants to add you.`)
   }
 
-  // placeholder contact for a pending pairing
-  private remote(card: Card): Contact {
-    return {
-      id: '',
-      num: 0,
-      name: card.name,
-      server: card.server,
-      account: card.account,
-      out: { link_id: card.link_id, token: card.token },
-      in: '',
-      status: 'pending',
-      created_at: 0,
-      updated_at: 0,
+  // the first of the account's devices to deliver the hello wins; the others drop their link and read its card back
+  private async completeRequest(c: Contact) {
+    const mine = await api.post<{ link_id: string; token: string }>('/api/links', { peer_server: c.server, peer_account: c.account })
+    const card: Card = { server: location.origin, account: String(this.me!.id), name: this.me!.display_name, link_id: mine.link_id, token: mine.token }
+    let sent: Mail | null
+    try {
+      sent = await this.deliver(c, this.config.message_ttl_max, { t: 'hello', card }, await helloId(c.out.link_id))
+    } catch (e) {
+      api.del(`/api/links/${mine.link_id}`).catch(() => {})
+      if (e instanceof Gone) this.forget(c, `${this.userName(c.num)} didn't accept.`)
+      return
     }
+    if (!sent) {
+      api.del(`/api/links/${mine.link_id}`).catch(() => {})
+      return this.adoptHello(c)
+    }
+    this.activate(c, mine.link_id)
+  }
+
+  private async adoptHello(c: Contact) {
+    const id = await helloId(c.out.link_id)
+    const m = (await linkReq<{ mail: Mail[] }>(c, 'GET', '/api/link/mail')).mail.find((x) => x.id === id)
+    if (!m || !this.device) return
+    if (!this.known[m.from_device]) await this.refreshDevices().catch(() => {})
+    const p = await openMail(this.device, m, this.ownSigners())
+    if (p?.t === 'hello') this.activate(c, p.card.link_id)
+  }
+
+  private activate(c: Contact, inLink: string) {
+    if (!this.contact(c.num) || c.in) return
+    c.in = inLink
+    c.status = 'active'
+    delete c.expires_at
+    this.touch(c)
+    this.addEvent(c.num, 'Contact added.')
+    this.flash(`${this.userName(c.num)} accepted.`)
+    this.peerDevices(c, true).catch(() => {})
+  }
+
+  // pending requests are this account's links, so every device shows the same ones
+  private async loadRequests() {
+    if (!this.device) return
+    const links = await api.get<{ id: string; kind?: string; state?: string; expires_at?: number; request?: string }[]>('/api/links')
+    const key = await this.requestKey()
+    const prompts: Prompt[] = []
+    for (const l of links) {
+      if (l.state !== 'pending' || l.kind === 'group') continue
+      const known = this.prompts.find((p) => p.link_id === l.id)
+      if (known) {
+        prompts.push(known)
+        continue
+      }
+      const name = (key && l.request ? await openRequest(key, l.request) : null) ?? ''
+      prompts.push({ link_id: l.id, name, words: await pairingWords(l.id, WORDS), expires_at: l.expires_at ?? 0 })
+      this.notify('New contact', `${name || 'Someone'} wants to add you.`)
+    }
+    this.prompts = prompts
   }
 
   async acceptPrompt(p: Prompt) {
     this.prompts = this.prompts.filter((x) => x.link_id !== p.link_id)
-    const c: Contact = {
-      ...this.remote(p.card),
-      id: crypto.randomUUID(),
-      num: this.nextNum(),
-      name: p.card.name || 'Contact',
-      in: p.link_id,
-      status: 'active',
-      created_at: this.serverNow(),
-      words: p.words,
-      updated_at: this.stamp(),
+    try {
+      await api.post(`/api/links/${p.link_id}/accept`)
+      this.flash(`Accepted. ${p.name || 'The contact'} is added once their app connects.`)
+    } catch (e) {
+      this.flash(e instanceof Error ? e.message : String(e))
     }
-    this.contacts.push(c)
-    this.touch(c)
-    this.addEvent(c.num, 'Contact added.')
-    this.postControl(c, { t: 'accept' }).catch((e) => this.sendFailed(c, e))
-    this.open(c.num)
   }
 
   async declinePrompt(p: Prompt) {
     this.prompts = this.prompts.filter((x) => x.link_id !== p.link_id)
-    await this.postControl(this.remote(p.card), { t: 'decline' }).catch(() => {})
     await api.del(`/api/links/${p.link_id}`).catch(() => {})
+  }
+
+  // a contact link with no contact carries the hello of a request this account accepted
+  private async takeHello(m: Mail) {
+    if (!this.device || this.contacts.some((c) => c.in === m.link_id)) return
+    const hello = await openHello(this.device, m)
+    const server = hello && normServer(hello.server)
+    if (!hello || !server) return
+    const id = await requestContactId(m.link_id)
+    if (this.gone[id] || this.contacts.some((c) => c.id === id)) return
+    const c: Contact = {
+      id,
+      num: 0,
+      name: hello.name || 'Contact',
+      server,
+      account: hello.account,
+      out: { link_id: hello.link_id, token: hello.token },
+      in: m.link_id,
+      status: 'active',
+      created_at: m.created_at,
+      words: await pairingWords(m.link_id, WORDS),
+      updated_at: m.created_at * 1000,
+    }
+    let signers: Record<string, string>
+    try {
+      signers = Object.fromEntries((await this.peerDevices(c)).map((d) => [d.id, d.sign_pub]))
+    } catch {
+      return
+    }
+    if (!(await signedBy(m, signers)) || this.contacts.some((x) => x.id === id || x.in === m.link_id)) return
+    c.num = this.nextNum()
+    c.signers = signers
+    this.prompts = this.prompts.filter((p) => p.link_id !== m.link_id)
+    this.contacts.push(c)
+    this.saveContacts()
+    this.schedulePush()
+    this.addEvent(c.num, 'Contact added.')
+    this.notify('New contact', `${this.userName(c.num)} was added.`)
   }
 
   contactWords(num: number): string[] {
@@ -1111,14 +1191,7 @@ class Store {
   // --- mail
 
   private async signersFor(c: Contact, from: string): Promise<Record<string, string>> {
-    if (!c.signers?.[from]) {
-      await this.peerDevices(c, true).catch((e) => {
-        if (e instanceof Gone && c.status === 'pending') {
-          api.del(`/api/links/${c.in}`).catch(() => {})
-          this.forget(c, `${this.userName(c.num)} didn't accept.`)
-        }
-      })
-    }
+    if (!c.signers?.[from]) await this.peerDevices(c, true).catch(() => {})
     return c.signers ?? {}
   }
 
@@ -1155,7 +1228,7 @@ class Store {
       if (!c) {
         const g = this.groups.find((x) => x.own.link_id === m.link_id)
         if (g) byGroup.set(g.id, [...(byGroup.get(g.id) ?? []), m])
-        else if (!this.groupLinks.has(m.link_id)) await this.maybeHello(m)
+        else if (!this.groupLinks.has(m.link_id)) await this.takeHello(m)
         continue
       }
       const plain = await this.openFrom(c, m)
@@ -1213,7 +1286,7 @@ class Store {
       const g = this.groups.find((x) => x.own.link_id === m.link_id)
       if (g) return this.takeGroupMail(g, m)
       if (this.groupLinks.has(m.link_id)) return
-      return this.maybeHello(m)
+      return this.takeHello(m)
     }
     if (this.messages[c.num]?.some((n) => n.id === m.id)) return
     const plain = await this.openFrom(c, m)
@@ -1233,19 +1306,6 @@ class Store {
     const name = this.userName(c.num)
     const at = m.created_at * 1000
     switch (p.t) {
-      case 'accept':
-        if (c.status !== 'pending') return
-        c.status = 'active'
-        this.touch(c, at)
-        this.addEvent(c.num, 'Contact added.')
-        if (live) this.flash(`${name} accepted.`)
-        return
-      case 'decline':
-        api.del(`/api/links/${c.in}`).catch(() => {})
-        return this.forget(c, `${name} declined.`)
-      case 'bye':
-        api.del(`/api/links/${c.in}`).catch(() => {})
-        return this.forget(c, `${name} is no longer a contact.`)
       case 'timer':
         if (c.ttl === p.ttl) return
         c.ttl = p.ttl
@@ -1267,11 +1327,12 @@ class Store {
     this.clock = t
     if (this.outbox.length) this.dropStale()
     for (const c of this.contacts) {
-      if (c.status === 'pending' && c.created_at + PENDING_SECS < t) {
-        api.del(`/api/links/${c.in}`).catch(() => {})
+      if (c.status === 'pending' && (c.expires_at ?? c.created_at + PENDING_SECS) < t) {
+        if (c.in) api.del(`/api/links/${c.in}`).catch(() => {})
         this.forget(c, `${this.userName(c.num)} didn't accept in time.`)
       }
     }
+    if (this.prompts.some((p) => p.expires_at && p.expires_at <= t)) this.prompts = this.prompts.filter((p) => !p.expires_at || p.expires_at > t)
     for (const [key, list] of Object.entries(this.messages)) {
       const id = Number(key)
       const keep = list.filter((n) => n.expires_at > t)
@@ -2183,6 +2244,8 @@ class Store {
         this.loadMail().catch(() => {})
         this.pullVault().catch(() => {})
         this.refreshDevices().catch(() => {})
+        this.loadRequests().catch(() => {})
+        this.checkRequests(true).catch(() => {})
         return
       case 'mail':
         this.takeMail(m).catch(() => {})
@@ -2198,12 +2261,13 @@ class Store {
       case 'devices':
         this.refreshDevices().catch(() => {})
         return
+      case 'requests':
+        this.loadRequests().catch(() => {})
+        return
       case 'link_removed': {
+        this.prompts = this.prompts.filter((p) => p.link_id !== m.link_id)
         const c = this.contacts.find((x) => x.in === m.link_id)
-        if (c) {
-          linkReq(c, 'DELETE', '/api/link').catch(() => {})
-          this.forget(c, `${this.userName(c.num)} is no longer a contact.`)
-        }
+        if (c) this.forget(c, `${this.userName(c.num)} is no longer a contact.`)
         return
       }
       case 'link_revoked': {
@@ -2239,7 +2303,7 @@ class Store {
   }
 }
 
-async function redeem(server: string, body: { ticket: string; peer_server: string; peer_account: string }) {
+async function redeem(server: string, body: { ticket: string; wait: number; request?: string }) {
   let res: Response
   try {
     res = await fetch(`${server}/api/pairings/redeem`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -2248,7 +2312,7 @@ async function redeem(server: string, body: { ticket: string; peer_server: strin
   }
   if (res.status === 410) throw new Error('This code has expired or was already used.')
   if (!res.ok) throw new Error("Couldn't add this contact.")
-  return (await res.json()) as { link_id: string; token: string }
+  return (await res.json()) as { link_id: string; token: string; expires_at: number }
 }
 
 export const store = new Store()

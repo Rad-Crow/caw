@@ -104,6 +104,10 @@
     }
   }
 
+  const hours = (num: number) => {
+    const h = Math.max(1, Math.round(((store.contact(num)?.expires_at ?? 0) - store.serverNow()) / 3600))
+    return h === 1 ? '1 hour' : `${h} hours`
+  }
   const pad = (n: number) => String(n).padStart(2, '0')
   const fmt = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`)
 </script>
@@ -120,7 +124,7 @@
       <div class="stack pad">
         <p>Waiting for {store.userName(waiting.num)} to accept.</p>
         <p class="words">{waiting.words.join(' ')}</p>
-        <p class="muted small">Check that {store.userName(waiting.num)} sees the same words.</p>
+        <p class="muted small">Check that {store.userName(waiting.num)} sees the same words. The request ends in {hours(waiting.num)}.</p>
         <div><button class="btn filled" onclick={onclose}>Done</button></div>
       </div>
     {:else}
@@ -149,7 +153,7 @@
         </div>
       {:else}
         <form class="stack pad" onsubmit={add}>
-          <label>Code <textarea rows="3" bind:value={entered} placeholder="caw:1:..." required></textarea></label>
+          <label>Code <textarea rows="3" bind:value={entered} placeholder="caw:2:..." required></textarea></label>
           {#if failed}<p class="error">{failed}</p>{/if}
           <div><button class="btn filled" disabled={busy || !entered.trim()}>{busy ? 'Adding...' : 'Add contact'}</button></div>
         </form>

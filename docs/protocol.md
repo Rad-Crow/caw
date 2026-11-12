@@ -67,7 +67,11 @@ Labels:
 | `caw-vault-v1` | vault AAD ([4.2](#42-document)) |
 | `caw-group-token-v1` | group link token ([9.1](#91-group-links)) |
 | `caw-group-id-v1` | derived group message id ([9.5](#95-sending)) |
-| `caw:1:` | pairing code prefix ([6.2](#62-pairing-code)) |
+| `caw-request-key-v1` | request key derivation ([6.2](#62-pairing-code)) |
+| `caw-request-v1` | HPKE info of a pairing request ([6.3](#63-pairing)) |
+| `caw-hello-v1` | hello message id ([6.3](#63-pairing)) |
+| `caw-contact-v1` | contact id from a request ([6.3](#63-pairing)) |
+| `caw:2:` | pairing code prefix ([6.2](#62-pairing-code)) |
 
 ## 3. Accounts and credentials
 
@@ -120,11 +124,12 @@ Contact record:
 | `server` | string | contact's server address |
 | `account` | string | contact's account id |
 | `out` | `{link_id, token}` | contact's link, used to reach the contact |
-| `in` | string | id of the account's link for the contact |
+| `in` | string | id of the account's link for the contact; empty while a request is pending |
 | `status` | `"pending"` or `"active"` | |
 | `created_at` | integer | seconds |
 | `ttl` | integer, optional | conversation message lifetime, seconds |
 | `words` | array of 6 strings, optional | verification words |
+| `expires_at` | integer, optional | seconds; when a pending request ends |
 | `updated_at` | integer | milliseconds; equal to the entry's `u` |
 
 Clients MUST ignore unknown fields. Groups are described in [9.10](#910-vault).
@@ -137,7 +142,7 @@ For each entry `e` in a fetched document, let `L` be the local `updated_at` of t
 - Else if `e.gone` is true or `e.c` is absent, the local contact is removed and its removal time set to `e.u`.
 - Else the local contact's synced fields are replaced with `e.c`, or it is added.
 
-A local change sets `updated_at = max(now_ms, updated_at + 1)`. A change caused by an `accept` or `timer` message sets `updated_at = max(created_at * 1000, updated_at + 1)`, using the message's `created_at`. Removal markers MAY be omitted from uploads 180 days after their time.
+A local change sets `updated_at = max(now_ms, updated_at + 1)`. A change caused by a `timer` message, and a contact stored from a `hello` (6.3), set `updated_at = max(created_at * 1000, updated_at + 1)`, using the message's `created_at`. Removal markers MAY be omitted from uploads 180 days after their time.
 
 ### 4.4 Upload
 
@@ -203,23 +208,24 @@ A link is used with the header `Authorization: Link <link id>.<token>`, or the q
 ### 6.2 Pairing code
 
 ```
-code = "caw:1:" b64(UTF-8(JSON({ "v": 1, "s": <server>, "t": <ticket>, "a": <account id>, "n": <display name> })))
+code = "caw:2:" b64(UTF-8(JSON({ "v": 2, "s": <server>, "t": <ticket>, "a": <account id>, "n": <display name>, "k": b64(request key) })))
 ```
 
-The ticket is obtained with `POST /api/pairings`. It is single use and expires at `expires_at`.
+The ticket is obtained with `POST /api/pairings`. It is single use and expires at `expires_at`. `k` is the X25519 public key of the account's request key, whose private key is `HKDF-SHA256(ikm = data key, salt = "", info = "caw-request-key-v1", length = 32)`; every device of the account derives it.
 
 ### 6.3 Pairing
 
-Account A shows a code; account B enters it.
+Account A shows a code; account B enters it. Until A accepts, B gives A only a name, and A's devices do not contact B's server.
 
 1. B MUST reject a code whose `s` and `a` are its own, or that identifies an existing contact.
-2. B creates link L_B for A on its server: `POST /api/links {peer_server: s, peer_account: a}`.
-3. B redeems the ticket on A's server: `POST {s}/api/pairings/redeem {ticket, peer_server, peer_account}`, receiving L_A. On failure B revokes L_B.
-4. B reads A's device list through L_A and MUST verify that `account` equals `a`.
-5. B sends through L_A a message with plaintext `{"t": "hello", "card": {server, account, name, link_id, token}}`, where the card describes B and L_B, and then stores the contact with `status: "pending"`.
-6. A device of A that receives a message on a link with no contact treats it as a possible hello. It decrypts it, reads the device list from `card.server` with the card's link, MUST verify that `account` equals `card.account` and that the message signature verifies with a listed device, and then presents the request with the verification words for the link the message arrived on.
-7. Accept: A stores the contact with `status: "active"`, `in` the arrival link, `out` the card's link, and sends `{"t": "accept"}`. Decline: A sends `{"t": "decline"}` and revokes the arrival link.
-8. B SHOULD keep the `sign_pub` of the devices read in step 4 to verify the reply, as a decline revokes L_A. B sets `status: "active"` on `accept`, and removes the contact and revokes L_B on `decline` or on `410` through L_A. B SHOULD remove a contact still pending after 1800 seconds and revoke L_B.
+2. B redeems the ticket on A's server: `POST {s}/api/pairings/redeem {ticket, wait, request}`, receiving L_A and its `expires_at`. `wait` is the request's lifetime in seconds, at most B's server's `pairing_request_hours`; A's server limits it to its own. `request = b64(enc || ct)`, where `(enc, ct) = HPKE.SealBase(pkR = k, info = "caw-request-v1", aad = "", pt = UTF-8(JSON({"name": <B's display name>})))`.
+3. B stores the contact with `status: "pending"`, `in` empty and `expires_at`.
+4. A's server sends `requests` to A's connections and a `request` push. A's devices list requests with `GET /api/links` and present each pending one with the name opened from `request`, which is not verified, and the verification words for L_A. A request is dropped when its link is revoked or removed.
+5. Accept: A sends `POST /api/links/{L_A}/accept`. Decline: A revokes L_A.
+6. B's devices read the request's state with `GET {s}/api/link` through L_A when the client starts or comes to the foreground, and periodically while it is in the foreground. On `410`, or once `expires_at` has passed, B removes the contact.
+7. When the state is `accepted`, a device of B creates L_B for A (`POST /api/links {peer_server: s, peer_account: a}`), reads A's device list through L_A, MUST verify that `account` equals `a`, keeps the `sign_pub` of the listed devices, and sends `{"t": "hello", "card": {server, account, name, link_id, token}}` through L_A with id `uuid8(SHA-256("caw-hello-v1" || UTF-8(L_A))[0..16])` (9.5), where the card describes B and L_B. It then sets the contact `active` with `in` L_B. On `409`, another device of B sent the hello first; the device revokes its L_B.
+8. When the state is `open` and the contact is still pending, a device of B reads the hello back with `GET {s}/api/link/mail` through L_A and sets the contact `active` with `in` the card's `link_id`.
+9. A device of A that receives a message through a contact link with no contact treats it as a hello. It decrypts it, reads the device list from `card.server` with the card's link, MUST verify that `account` equals `card.account` and that the message signature verifies with a listed device, and stores the contact with id `uuid8(SHA-256("caw-contact-v1" || UTF-8(L_A))[0..16])`, `status: "active"`, `in` L_A, `out` the card's link and the card's server, account and name, so that every device of A stores the same record.
 
 ### 6.4 Verification words
 
@@ -232,7 +238,7 @@ words = [ wordlist[b] for b in bytes ]
 
 ### 6.5 Removal
 
-To remove a contact, a client revokes `in` (`DELETE /api/links/{in}`), requests `DELETE /api/link` with `out` on the contact's server, and records a removal in the vault. On `link_removed` for a contact's `in`, the client removes the contact and requests `DELETE /api/link` with `out`. On `410` from the contact's server, the client removes the contact. On `link_revoked`, clients remove the contact or pending request with that `in`.
+To remove a contact, a client revokes `in` (`DELETE /api/links/{in}`) if it is set, requests `DELETE /api/link` with `out` on the contact's server, which also withdraws a pending request, and records a removal in the vault. On `link_removed` for a contact's `in`, the client removes the contact. On `410` from the contact's server, the client removes the contact. On `link_revoked`, clients remove the contact with that `in`.
 
 ## 7. Messages
 
@@ -246,10 +252,9 @@ A JSON object with type `t`:
 | `media` | `kind`: `"image"` or `"video"`; `mime`: string; `blob`: blob id; `key`: `b64` of 32 bytes; `size`: integer; `w`, `h`: integers; `dur`: integer seconds (video); `thumb`: standard base64 JPEG; `text`: string, optional |
 | `call` | `outcome`: `"answered"`, `"missed"` or `"declined"`; `secs`: integer, when answered |
 | `hello` | `card`: `{server, account, name, link_id, token}` |
-| `accept`, `decline`, `bye` | none |
 | `timer` | `ttl`: integer seconds |
 
-`hello`, `accept`, `decline`, `timer` and `bye` are control messages and are not displayed. Group messages are described in [9.4](#94-messages).
+`hello` and `timer` are control messages and are not displayed. Group messages are described in [9.4](#94-messages).
 
 ### 7.2 Encryption
 
@@ -309,11 +314,8 @@ New messages use the contact's `ttl`, or the server default. Changing it sets th
 
 | `t` | receiver action |
 |---|---|
-| `hello` | [6.3](#63-pairing) step 6 |
-| `accept` | set the pending contact `active` |
-| `decline` | remove the contact; revoke `in` |
+| `hello` | [6.3](#63-pairing) step 9, through a contact link with no contact |
 | `timer` | set the contact's `ttl` |
-| `bye` | remove the contact; revoke `in` |
 
 All devices of the receiving account process control messages; vault timestamps follow [4.3](#43-merge).
 
@@ -507,6 +509,7 @@ Clients register a WebPush endpoint (RFC 8030) created with the server's VAPID p
 | payload | client action |
 |---|---|
 | `{"type": "mail"}` | fetch `GET /api/mail` and notify |
+| `{"type": "request"}` | fetch `GET /api/links` and notify of new pairing requests |
 | `{"type": "call", "call_id"}` | connect the WebSocket; the call arrives in `hello` |
 | `{"type": "cancel", "call_id"}` | stop ringing for `call_id` |
 
@@ -519,7 +522,8 @@ Clients MUST discard payloads that fail to decrypt.
 - Servers MUST reject `POST /api/link/mail` with `412` when the stanzas with `o = "to"` do not include every device of the account that has an encryption key.
 - Servers MUST delete messages and attachments at `expires_at`, and SHOULD do so in a way that does not leave the data recoverable from the database file.
 - Servers MUST keep each device's encryption public keys for at least `ttl_max + 86400` seconds after they are replaced and return them in `keys`.
-- Servers MUST deliver `mail` to all connections and push endpoints of the account, and `sent`, `vault`, `devices`, `link_removed` and `link_revoked` to all of the account's connections.
+- Servers MUST deliver `mail` and `request` to all connections and push endpoints of the account, and `sent`, `vault`, `devices`, `requests`, `link_removed` and `link_revoked` to all of the account's connections.
+- A link made by redeeming a ticket is pending until its owner accepts it: through it, servers MUST accept only `GET /api/link` and `DELETE /api/link`. An accepted link becomes open when mail is first posted through it. Servers MUST NOT accept a pending or accepted link after its `expires_at`, and SHOULD delete it then.
 - Removing or expiring a device MUST delete its sessions and close their connections.
 - Servers SHOULD encrypt stored vaults and wrapped keys with a secret held outside the database.
 - Servers MUST send `Cache-Control: no-store` with API responses.
@@ -566,6 +570,19 @@ caw-call-v1
 call-id
 offer
 v=0
+```
+
+Request key, data key `AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8`:
+
+```
+k = ruLfkL5uTuSU7f1JqZJ_tsVPJO0Ct_GYTLZ6fsMLtE4
+```
+
+Hello id and contact id for L_A `0b1f2a3c-4d5e-4f60-8a71-92b3c4d5e6f7`:
+
+```
+hello   = 924e8313-800c-8771-997e-450c0ddc8847
+contact = 3aee150e-f8d1-89d8-8682-09b1418af66b
 ```
 
 HPKE open, `info = "caw-message-key-v1"`, `aad = "message-id"`:

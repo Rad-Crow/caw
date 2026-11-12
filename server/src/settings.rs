@@ -13,6 +13,7 @@ pub struct Settings {
     pub max_upload_mb: u64,
     pub device_expiry_days: i64,
     pub pairing_code_minutes: i64,
+    pub pairing_request_hours: i64,
     pub max_group_members: i64,
 }
 
@@ -28,6 +29,7 @@ impl Default for Settings {
             max_upload_mb: 25,
             device_expiry_days: 30,
             pairing_code_minutes: 120,
+            pairing_request_hours: 24,
             max_group_members: 10,
         }
     }

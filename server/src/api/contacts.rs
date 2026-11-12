@@ -13,7 +13,7 @@ use crate::{
     auth::{hash_token, now, random_token, AuthUser},
     error::{bad, AppError, Result},
     hub::{Mail, Out},
-    link::Link,
+    link::{AnyLink, Link},
     push,
     settings::Settings,
     webpush, App,
@@ -22,6 +22,8 @@ use crate::{
 const MAX_BODY: usize = 64 * 1024;
 const MAX_BLOBS: usize = 10;
 const MAX_LINKS: i64 = 1000;
+// a pairing request's sealed name, base64
+const MAX_REQUEST: usize = 1024;
 // sender's and recipient's devices together
 const MAX_STANZAS: usize = 40;
 // a replaced group token keeps working this long, so messages already on their way arrive
@@ -45,7 +47,8 @@ fn clean_peer(server: &str, account: &str) -> Result<(String, String)> {
     Ok((server.to_string(), account.to_string()))
 }
 
-async fn new_link(app: &App, user: i64, peer_server: &str, peer_account: &str, group: Option<(i64, &str)>) -> Result<Value> {
+// `request` makes a pending pairing request: its expiry and the requester's sealed name
+async fn new_link(app: &App, user: i64, peer_server: &str, peer_account: &str, group: Option<(i64, &str)>, request: Option<(i64, Option<&str>)>) -> Result<Value> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM links WHERE user_id = ?")
         .bind(user)
         .fetch_one(&app.db)
@@ -57,8 +60,8 @@ async fn new_link(app: &App, user: i64, peer_server: &str, peer_account: &str, g
     let token = group.map_or_else(random_token, |(_, t)| t.to_string());
     let t = now();
     sqlx::query(
-        "INSERT INTO links (id, user_id, token_hash, peer_server, peer_account, created_at, last_used, kind, gen)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO links (id, user_id, token_hash, peer_server, peer_account, created_at, last_used, kind, gen, state, expires_at, request)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(user)
@@ -69,6 +72,9 @@ async fn new_link(app: &App, user: i64, peer_server: &str, peer_account: &str, g
     .bind(t)
     .bind(if group.is_some() { "group" } else { "contact" })
     .bind(group.map_or(0, |(g, _)| g))
+    .bind(if request.is_some() { "pending" } else { "open" })
+    .bind(request.map(|(e, _)| e))
+    .bind(request.and_then(|(_, r)| r))
     .execute(&app.db)
     .await?;
     Ok(json!({ "link_id": id, "token": token }))
@@ -90,20 +96,28 @@ pub async fn create_pairing(State(app): State<Arc<App>>, me: AuthUser) -> Result
 #[derive(Deserialize)]
 pub struct Redeem {
     ticket: String,
-    peer_server: String,
-    peer_account: String,
+    wait: Option<i64>,
+    request: Option<String>,
 }
 
-// the ticket is the whole authorization; single use
+// the ticket is the whole authorization; single use. The requester's server and account are not sent
 pub async fn redeem_pairing(State(app): State<Arc<App>>, Json(req): Json<Redeem>) -> Result<Json<Value>> {
-    let (peer_server, peer_account) = clean_peer(&req.peer_server, &req.peer_account)?;
+    if req.request.as_deref().is_some_and(|r| r.len() > MAX_REQUEST || webpush::b64(r).is_err()) {
+        return Err(bad("Invalid request."));
+    }
     let user: Option<i64> = sqlx::query_scalar("DELETE FROM pairings WHERE ticket_hash = ? AND expires_at > ? RETURNING user_id")
         .bind(hash_token(&req.ticket))
         .bind(now())
         .fetch_optional(&app.db)
         .await?;
     let user = user.ok_or_else(|| AppError::Gone("This code has expired or was already used.".into()))?;
-    Ok(Json(new_link(&app, user, &peer_server, &peer_account, None).await?))
+    let max = Settings::load(&app.db).await?.pairing_request_hours * 3600;
+    let expires_at = now() + req.wait.unwrap_or(max).clamp(60, max);
+    let mut v = new_link(&app, user, "", "", None, Some((expires_at, req.request.as_deref()))).await?;
+    app.hub.send_user(user, &Out::Requests);
+    tokio::spawn(push::send_user(app.clone(), user, json!({ "type": "request" })));
+    v["expires_at"] = json!(expires_at);
+    Ok(Json(v))
 }
 
 #[derive(Deserialize)]
@@ -120,7 +134,7 @@ pub async fn create_link(State(app): State<Arc<App>>, me: AuthUser, Json(req): J
     let mut v = match req.kind.as_deref() {
         None | Some("contact") => {
             let (server, account) = clean_peer(req.peer_server.as_deref().unwrap_or(""), req.peer_account.as_deref().unwrap_or(""))?;
-            new_link(&app, me.id, &server, &account, None).await?
+            new_link(&app, me.id, &server, &account, None, None).await?
         }
         Some("group") => {
             let token = req.token.unwrap_or_default();
@@ -129,7 +143,7 @@ pub async fn create_link(State(app): State<Arc<App>>, me: AuthUser, Json(req): J
             if gen < 0 {
                 return Err(bad("Invalid token generation."));
             }
-            new_link(&app, me.id, "", "", Some((gen, &token))).await?
+            new_link(&app, me.id, "", "", Some((gen, &token)), None).await?
         }
         Some(_) => return Err(bad("Invalid link kind.")),
     };
@@ -145,14 +159,54 @@ pub struct LinkRow {
     peer_account: String,
     created_at: i64,
     last_used: i64,
+    state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request: Option<String>,
 }
 
 pub async fn my_links(State(app): State<Arc<App>>, me: AuthUser) -> Result<Json<Vec<LinkRow>>> {
-    let rows = sqlx::query_as("SELECT id, kind, peer_server, peer_account, created_at, last_used FROM links WHERE user_id = ? ORDER BY created_at")
-        .bind(me.id)
+    let rows = sqlx::query_as(
+        "SELECT id, kind, peer_server, peer_account, created_at, last_used, state, expires_at, request FROM links
+         WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at",
+    )
+    .bind(me.id)
+    .bind(now())
+    .fetch_all(&app.db)
+    .await?;
+    Ok(Json(rows))
+}
+
+// accepting lets the requester read the device list and send its card; the link opens when mail first arrives through it
+pub async fn accept_request(State(app): State<Arc<App>>, me: AuthUser, Path(id): Path<String>) -> Result<StatusCode> {
+    let state: Option<String> = sqlx::query_scalar(
+        "UPDATE links SET state = CASE state WHEN 'pending' THEN 'accepted' ELSE state END
+         WHERE id = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?) RETURNING state",
+    )
+    .bind(&id)
+    .bind(me.id)
+    .bind(now())
+    .fetch_optional(&app.db)
+    .await?;
+    if state.is_none() {
+        return Err(AppError::Gone("This request is no longer available.".into()));
+    }
+    app.hub.send_user(me.id, &Out::Requests);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// requests that were not accepted, or whose requester never sent its card, end at their expiry
+pub async fn sweep_requests(app: &App) -> anyhow::Result<()> {
+    let gone: Vec<(String, i64)> = sqlx::query_as("DELETE FROM links WHERE expires_at <= ? RETURNING id, user_id")
+        .bind(now())
         .fetch_all(&app.db)
         .await?;
-    Ok(Json(rows))
+    for (id, user) in gone {
+        app.hub.drop_link(&id);
+        app.hub.send_user(user, &Out::LinkRevoked { link_id: id });
+    }
+    Ok(())
 }
 
 pub async fn revoke_link(State(app): State<Arc<App>>, me: AuthUser, Path(id): Path<String>) -> Result<StatusCode> {
@@ -305,7 +359,14 @@ pub async fn send_mail(State(app): State<Arc<App>>, link: Link, Json(req): Json<
     if link.group && !req.blobs.is_empty() {
         return Err(bad("Attachments are not accepted through a group link."));
     }
-    Ok(Json(store_mail(&app, &link.id, link.user_id, req, true).await?))
+    let mail = store_mail(&app, &link.id, link.user_id, req, true).await?;
+    if link.state == "accepted" {
+        sqlx::query("UPDATE links SET state = 'open', expires_at = NULL, request = NULL WHERE id = ? AND state = 'accepted'")
+            .bind(&link.id)
+            .execute(&app.db)
+            .await?;
+    }
+    Ok(Json(mail))
 }
 
 // no push: the account's other devices catch up from the mailbox
@@ -416,8 +477,13 @@ pub async fn link_mail(State(app): State<Arc<App>>, link: Link) -> Result<Json<V
     Ok(Json(json!({ "now": t, "mail": rows })))
 }
 
-// the contact removes the link; connected devices of the account are notified
-pub async fn drop_link(State(app): State<Arc<App>>, link: Link) -> Result<StatusCode> {
+pub async fn link_state(State(app): State<Arc<App>>, AnyLink(link): AnyLink) -> Result<Json<Value>> {
+    app.limits.hit(&link.id, "state", 60)?;
+    Ok(Json(json!({ "state": link.state, "expires_at": link.expires_at })))
+}
+
+// the contact removes the link, or a requester withdraws its request; connected devices of the account are notified
+pub async fn drop_link(State(app): State<Arc<App>>, AnyLink(link): AnyLink) -> Result<StatusCode> {
     link.contact_only()?;
     sqlx::query("DELETE FROM links WHERE id = ?").bind(&link.id).execute(&app.db).await?;
     app.hub.drop_link(&link.id);

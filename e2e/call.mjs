@@ -117,20 +117,20 @@ const enterCode = async (p, code) => {
   return (await p.locator('.add-contact .words').textContent()).trim()
 }
 const respell = (code) => {
-  const o = JSON.parse(Buffer.from(code.slice('caw:1:'.length), 'base64url'))
+  const o = JSON.parse(Buffer.from(code.slice('caw:2:'.length), 'base64url'))
   o.s = o.s.toUpperCase() + '/'
-  return 'caw:1:' + Buffer.from(JSON.stringify(o)).toString('base64url')
+  return 'caw:2:' + Buffer.from(JSON.stringify(o)).toString('base64url')
 }
 
 let code = await showCode(a)
 const bobWords = await enterCode(b, code)
-await a.getByRole('dialog', { name: 'New contact' }).waitFor()
+await a.getByRole('heading', { name: 'Bob wants to add you' }).waitFor()
 const aliceWords = (await a.locator('.dialog.prompt .words').textContent()).trim()
 if (aliceWords !== bobWords || aliceWords.split(' ').length !== 6) throw new Error(`words differ: ${aliceWords} / ${bobWords}`)
 await b.getByRole('button', { name: 'Done' }).click()
 await a.getByRole('button', { name: 'Accept' }).click()
-await b.getByText('Contact added.').waitFor({ timeout: 10000 })
-await a.locator('.caw-row', { hasText: 'Bob' }).waitFor()
+await b.getByText('Contact added.').waitFor({ timeout: 20000 })
+await a.locator('.caw-row', { hasText: 'Bob' }).waitFor({ timeout: 20000 })
 await b.locator('.caw-row', { hasText: 'Alice' }).waitFor()
 step(`paired by code, words match on both sides: ${aliceWords}`)
 
@@ -179,48 +179,41 @@ await c.locator('.dialog-head').getByRole('button', { name: 'Close' }).click()
 step('a used code is refused')
 
 await a.locator('.dialog-head').getByRole('button', { name: 'Close' }).click().catch(() => {})
-// alice declines; carol's device list requests through alice's link wait until alice has revoked it
-const decline = async (notice) => {
-  await a.getByRole('dialog', { name: 'New contact' }).waitFor()
-  const revoked = a.waitForResponse((r) => r.request().method() === 'DELETE' && r.url().includes('/api/links/'))
-  revoked.catch(() => {})
-  await c.route(`${B}/api/link/devices`, async (r) => {
-    await revoked.catch(() => {})
-    await r.continue().catch(() => {})
-  })
-  const saved = vaultPut(c)
-  await a.getByRole('button', { name: 'Decline' }).click()
-  await c.getByText(notice).waitFor({ timeout: 10000 })
-  await c.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
-  await saved
-  await c.unroute(`${B}/api/link/devices`)
-}
+// before alice accepts, carol's app sends only a name, and alice's app sends nothing to carol's server
+const toCarol = []
+const watch = (r) => r.url().startsWith(B2) && toCarol.push(r.url())
+a.on('request', watch)
 code = await showCode(a)
-await enterCode(c, code)
+const carolWords = await enterCode(c, code)
 await c.getByRole('button', { name: 'Done' }).click()
 await c.locator('.caw-row', { hasText: 'Alice' }).waitFor()
 if (!(await c.locator('.composer textarea').isDisabled())) throw new Error('composer should be locked while pending')
-await decline('Alice declined.')
-step('pending pairing locks the composer; decline removes it on the other side, read after alice revoked the link')
+await a.getByRole('heading', { name: 'Carol wants to add you' }).waitFor()
+if ((await a.locator('.dialog.prompt .words').textContent()).trim() !== carolWords) throw new Error('words differ')
+const requests = await a.evaluate(async () => (await (await fetch('/api/links')).json()).filter((l) => l.state === 'pending'))
+if (requests.length !== 1 || requests[0].peer_server || requests[0].peer_account) throw new Error(`alice's server knows more than a request: ${JSON.stringify(requests)}`)
+let saved = vaultPut(c)
+await a.getByRole('button', { name: 'Decline' }).click()
+await c.getByText("Alice didn't accept.").waitFor({ timeout: 20000 })
+await c.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
+await saved
+a.off('request', watch)
+if (toCarol.length) throw new Error(`alice's app contacted carol's server: ${toCarol}`)
+step("pending request locks the composer; alice sees carol's name and the words but nothing about her server, and her app never contacts it; decline ends the request for carol")
 
-// signed in again, carol has the request from the vault but not alice's keys, so the decline cannot be verified
+// carol signs in again before alice accepts: the request comes from the vault and her new device completes it
 code = await showCode(a)
-const pending = vaultPut(c)
-await enterCode(c, code)
+saved = vaultPut(c)
+await enterCode(c, respell(code))
 await c.getByRole('button', { name: 'Done' }).click()
-await pending
+await saved
 await c.getByRole('button', { name: /Carol/ }).click()
 await c.getByRole('menuitem', { name: 'Sign out' }).click()
 await signIn(c, 'carol', PW.carol)
 await c.locator('.caw-row', { hasText: 'Alice' }).waitFor()
-await decline("Alice didn't accept.")
-step("signed in again without alice's keys, carol's request ends once alice revoked the link")
-
-code = await showCode(a)
-await enterCode(c, respell(code))
-await c.getByRole('button', { name: 'Done' }).click()
 await a.getByRole('button', { name: 'Accept' }).click()
-await c.getByText('Contact added.').waitFor({ timeout: 10000 })
+await c.getByText('Alice accepted.').waitFor({ timeout: 20000 })
+await a.locator('.caw-row', { hasText: 'Carol' }).waitFor({ timeout: 20000 })
 await c.locator('.caw-row', { hasText: 'Alice' }).locator('.caw-item').click()
 await c.getByPlaceholder('Message to Alice').fill('hello from the other server')
 await c.keyboard.press('Enter')
@@ -235,7 +228,7 @@ await a.locator('.callbar', { hasText: /\d:\d\d/ }).waitFor({ timeout: 15000 })
 await c.locator('.callbar', { hasText: /\d:\d\d/ }).waitFor({ timeout: 15000 })
 await a.getByRole('button', { name: 'Hang up' }).click()
 await c.locator('.callbar').waitFor({ state: 'detached' })
-step("carol (server 2) and alice (server 1): paired from a code with alice's address respelled (capitals, trailing slash), messages both ways, call connected")
+step("carol (server 2) and alice (server 1): request from a code with alice's address respelled (capitals, trailing slash), completed by carol's next device after alice accepted; messages both ways, call connected")
 
 await a.locator('.caw-row', { hasText: 'Bob' }).locator('.caw-item').click()
 await a.getByPlaceholder('Message to Bob').fill('half typed')
@@ -253,7 +246,7 @@ await a.getByLabel('Search contacts').fill('')
 step('search filters the contact list')
 
 await a.locator('.caw-row', { hasText: 'Carol' }).locator('.caw-item').click()
-let saved = vaultPut(a)
+saved = vaultPut(a)
 await a.getByRole('button', { name: 'Add favorite' }).click()
 await saved
 await a.reload()
