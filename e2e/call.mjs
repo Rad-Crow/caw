@@ -179,16 +179,42 @@ await c.locator('.dialog-head').getByRole('button', { name: 'Close' }).click()
 step('a used code is refused')
 
 await a.locator('.dialog-head').getByRole('button', { name: 'Close' }).click().catch(() => {})
+// alice declines; carol's device list requests through alice's link wait until alice has revoked it
+const decline = async (notice) => {
+  await a.getByRole('dialog', { name: 'New contact' }).waitFor()
+  const revoked = a.waitForResponse((r) => r.request().method() === 'DELETE' && r.url().includes('/api/links/'))
+  revoked.catch(() => {})
+  await c.route(`${B}/api/link/devices`, async (r) => {
+    await revoked.catch(() => {})
+    await r.continue().catch(() => {})
+  })
+  const saved = vaultPut(c)
+  await a.getByRole('button', { name: 'Decline' }).click()
+  await c.getByText(notice).waitFor({ timeout: 10000 })
+  await c.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
+  await saved
+  await c.unroute(`${B}/api/link/devices`)
+}
 code = await showCode(a)
 await enterCode(c, code)
 await c.getByRole('button', { name: 'Done' }).click()
 await c.locator('.caw-row', { hasText: 'Alice' }).waitFor()
 if (!(await c.locator('.composer textarea').isDisabled())) throw new Error('composer should be locked while pending')
-await a.getByRole('dialog', { name: 'New contact' }).waitFor()
-await a.getByRole('button', { name: 'Decline' }).click()
-await c.getByText('Alice declined.').waitFor({ timeout: 10000 })
-await c.locator('.caw-row', { hasText: 'Alice' }).waitFor({ state: 'detached' })
-step('pending pairing locks the composer; decline removes it on the other side')
+await decline('Alice declined.')
+step('pending pairing locks the composer; decline removes it on the other side, read after alice revoked the link')
+
+// signed in again, carol has the request from the vault but not alice's keys, so the decline cannot be verified
+code = await showCode(a)
+const pending = vaultPut(c)
+await enterCode(c, code)
+await c.getByRole('button', { name: 'Done' }).click()
+await pending
+await c.getByRole('button', { name: /Carol/ }).click()
+await c.getByRole('menuitem', { name: 'Sign out' }).click()
+await signIn(c, 'carol', PW.carol)
+await c.locator('.caw-row', { hasText: 'Alice' }).waitFor()
+await decline("Alice didn't accept.")
+step("signed in again without alice's keys, carol's request ends once alice revoked the link")
 
 code = await showCode(a)
 await enterCode(c, respell(code))

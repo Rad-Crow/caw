@@ -1031,10 +1031,13 @@ class Store {
     try {
       await this.postControl(c, { t: 'hello', card })
     } catch (e) {
+      this.peers.delete(c.id)
       api.del(`/api/links/${mine.link_id}`).catch(() => {})
       linkReq(c, 'DELETE', '/api/link').catch(() => {})
       throw e instanceof Gone ? new Error('This code has expired or was already used.') : e instanceof Unreachable ? new Error("Can't reach that server.") : e
     }
+    // kept to verify their reply: a decline revokes the link their keys are read through
+    c.signers = Object.fromEntries((this.peers.get(c.id)?.devices ?? []).map((d) => [d.id, d.sign_pub]))
     this.contacts.push(c)
     this.touch(c)
     return c.num
@@ -1108,7 +1111,14 @@ class Store {
   // --- mail
 
   private async signersFor(c: Contact, from: string): Promise<Record<string, string>> {
-    if (!c.signers?.[from]) await this.peerDevices(c, true).catch(() => {})
+    if (!c.signers?.[from]) {
+      await this.peerDevices(c, true).catch((e) => {
+        if (e instanceof Gone && c.status === 'pending') {
+          api.del(`/api/links/${c.in}`).catch(() => {})
+          this.forget(c, `${this.userName(c.num)} didn't accept.`)
+        }
+      })
+    }
     return c.signers ?? {}
   }
 
@@ -1149,6 +1159,10 @@ class Store {
         continue
       }
       const plain = await this.openFrom(c, m)
+      if (!this.contact(c.num)) {
+        delete grouped[c.num]
+        continue
+      }
       if (plain && isGroupContent(plain)) continue
       if (plain && isControl(plain)) {
         this.control(c, plain, m, false)
@@ -1203,6 +1217,7 @@ class Store {
     }
     if (this.messages[c.num]?.some((n) => n.id === m.id)) return
     const plain = await this.openFrom(c, m)
+    if (!this.contact(c.num)) return
     if (plain && isGroupContent(plain)) return
     if (plain && isControl(plain)) return this.control(c, plain, m, true)
     const msg: Message = { id: m.id, from_user: c.num, to_user: this.me!.id, created_at: m.created_at, expires_at: m.expires_at, plain }

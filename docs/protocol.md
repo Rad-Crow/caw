@@ -219,7 +219,7 @@ Account A shows a code; account B enters it.
 5. B sends through L_A a message with plaintext `{"t": "hello", "card": {server, account, name, link_id, token}}`, where the card describes B and L_B, and then stores the contact with `status: "pending"`.
 6. A device of A that receives a message on a link with no contact treats it as a possible hello. It decrypts it, reads the device list from `card.server` with the card's link, MUST verify that `account` equals `card.account` and that the message signature verifies with a listed device, and then presents the request with the verification words for the link the message arrived on.
 7. Accept: A stores the contact with `status: "active"`, `in` the arrival link, `out` the card's link, and sends `{"t": "accept"}`. Decline: A sends `{"t": "decline"}` and revokes the arrival link.
-8. B sets `status: "active"` on `accept`, and removes the contact and revokes L_B on `decline`. B SHOULD remove a contact still pending after 1800 seconds and revoke L_B.
+8. B SHOULD keep the `sign_pub` of the devices read in step 4 to verify the reply, as a decline revokes L_A. B sets `status: "active"` on `accept`, and removes the contact and revokes L_B on `decline` or on `410` through L_A. B SHOULD remove a contact still pending after 1800 seconds and revoke L_B.
 
 ### 6.4 Verification words
 

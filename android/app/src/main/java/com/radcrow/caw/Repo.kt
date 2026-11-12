@@ -782,6 +782,7 @@ class Repo(private val app: CawApp) {
         try {
             postControl(c, Plain("hello", card = card).toJson())
         } catch (e: IOException) {
+            peers.remove(c.id)
             runCatching { app.api.revokeLink(mine.linkId) }
             app.scope.launch { runCatching { app.api.linkDrop(c) } }
             throw when (e) {
@@ -790,7 +791,9 @@ class Repo(private val app: CawApp) {
                 else -> e
             }
         }
-        setContacts(contacts.value + c)
+        // kept to verify their reply: a decline revokes the link their keys are read through
+        val signers = peers[c.id]?.second.orEmpty().associate { it.id to it.signPub }
+        setContacts(contacts.value + c.copy(signers = signers))
         schedulePush()
         return c.num to words
     }
@@ -835,7 +838,14 @@ class Repo(private val app: CawApp) {
     // --- mail
 
     private suspend fun signersFor(c: Contact, from: String): Map<String, String> {
-        if (contact(c.num)?.signers?.containsKey(from) != true) runCatching { peerDevices(c, fresh = true) }
+        if (contact(c.num)?.signers?.containsKey(from) != true) {
+            runCatching { peerDevices(c, fresh = true) }.onFailure {
+                if (it is Gone && c.status == "pending") {
+                    app.scope.launch { runCatching { app.api.revokeLink(c.inLink) } }
+                    forget(c, "${name(c.num)} didn't accept.")
+                }
+            }
+        }
         return contact(c.num)?.signers.orEmpty()
     }
 
@@ -861,6 +871,10 @@ class Repo(private val app: CawApp) {
                 continue
             }
             val raw = openFrom(c, m)
+            if (contact(c.num) == null) {
+                grouped.remove(c.num)
+                continue
+            }
             if (raw != null && isGroupContent(raw)) continue
             if (raw != null && raw.string("t") in CONTROLS) {
                 control(c, raw, m, false)
@@ -942,6 +956,7 @@ class Repo(private val app: CawApp) {
         }
         if (messages.value[c.num]?.any { it.raw.id == m.id } == true) return
         val raw = openFrom(c, m)
+        if (contact(c.num) == null) return
         if (raw != null && isGroupContent(raw)) return
         if (raw != null && raw.string("t") in CONTROLS) return control(c, raw, m, true)
         val msg = Message(RawMessage(m.id, c.num, uid, m.createdAt, m.expiresAt), raw?.let(::plainOf))
