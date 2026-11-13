@@ -169,7 +169,7 @@ pub struct LinkRow {
 pub async fn my_links(State(app): State<Arc<App>>, me: AuthUser) -> Result<Json<Vec<LinkRow>>> {
     let rows = sqlx::query_as(
         "SELECT id, kind, peer_server, peer_account, created_at, last_used, state, expires_at, request FROM links
-         WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at",
+         WHERE user_id = ? AND state != 'closed' AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at",
     )
     .bind(me.id)
     .bind(now())
@@ -196,8 +196,29 @@ pub async fn accept_request(State(app): State<Arc<App>>, me: AuthUser, Path(id):
     Ok(StatusCode::NO_CONTENT)
 }
 
-// requests that were not accepted, or whose requester never sent its card, end at their expiry
-pub async fn sweep_requests(app: &App) -> anyhow::Result<()> {
+// a member that leaves keeps its device list readable until the last state it sent has expired, so members can verify it
+pub async fn close_link(State(app): State<Arc<App>>, me: AuthUser, Path(id): Path<String>) -> Result<StatusCode> {
+    let keep = Settings::load(&app.db).await?.message_ttl_max;
+    let closed = sqlx::query("UPDATE links SET state = 'closed', expires_at = ? WHERE id = ? AND user_id = ? AND kind = 'group'")
+        .bind(now() + keep)
+        .bind(&id)
+        .bind(me.id)
+        .execute(&app.db)
+        .await?;
+    if closed.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    let files: Vec<String> = sqlx::query_scalar("DELETE FROM blobs WHERE link_id = ? RETURNING id").bind(&id).fetch_all(&app.db).await?;
+    for f in files {
+        let _ = tokio::fs::remove_file(blobs::path(&app, &f)).await;
+    }
+    sqlx::query("DELETE FROM mail WHERE link_id = ?").bind(&id).execute(&app.db).await?;
+    app.hub.send_user(me.id, &Out::LinkRevoked { link_id: id });
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// pairing requests not accepted or completed, and closed group links, end at their expiry
+pub async fn sweep_links(app: &App) -> anyhow::Result<()> {
     let gone: Vec<(String, i64)> = sqlx::query_as("DELETE FROM links WHERE expires_at <= ? RETURNING id, user_id")
         .bind(now())
         .fetch_all(&app.db)
@@ -237,7 +258,7 @@ pub async fn set_token(
     let th = hash_token(&req.token);
     for _ in 0..2 {
         let row: Option<(i64, String)> =
-            sqlx::query_as("SELECT gen, token_hash FROM links WHERE id = ? AND user_id = ? AND kind = 'group'")
+            sqlx::query_as("SELECT gen, token_hash FROM links WHERE id = ? AND user_id = ? AND kind = 'group' AND state = 'open'")
                 .bind(&id)
                 .bind(me.id)
                 .fetch_optional(&app.db)
@@ -267,7 +288,7 @@ pub async fn set_token(
 }
 
 pub async fn own_group_link(app: &App, user: i64, id: &str) -> Result<()> {
-    let found: Option<String> = sqlx::query_scalar("SELECT id FROM links WHERE id = ? AND user_id = ? AND kind = 'group'")
+    let found: Option<String> = sqlx::query_scalar("SELECT id FROM links WHERE id = ? AND user_id = ? AND kind = 'group' AND state = 'open'")
         .bind(id)
         .bind(user)
         .fetch_optional(&app.db)
@@ -355,6 +376,9 @@ pub struct NewMail {
 
 pub async fn send_mail(State(app): State<Arc<App>>, link: Link, Json(req): Json<NewMail>) -> Result<Json<Mail>> {
     app.limits.hit(&link.id, "mail", if link.group { 120 } else { 60 })?;
+    if link.state == "closed" {
+        return Err(AppError::Forbidden("This member left the group.".into()));
+    }
     // a member's attachments stay on its own server
     if link.group && !req.blobs.is_empty() {
         return Err(bad("Attachments are not accepted through a group link."));

@@ -461,7 +461,7 @@ Mail received through a group link (`kind` in `GET /api/links`) belongs to that 
 
 1. Decrypt with the own stanza (7.6, steps 1 and 3).
 2. Require `g` to be the group, and `m` to be the own member id, a live member, a former member whose mail has a `created_at` no later than its entry in `left`, or the inviter before the first state.
-3. Verify `sig` with the identity key of `from_device`: for the own member id from the own known records (5.4), otherwise from the device list of `m`'s account read through `m`'s link, or through the contact's link for the inviter before the first state. Members' identity keys are retained while the group is kept, so that mail from former members stays readable.
+3. Verify `sig` with the identity key of `from_device`: for the own member id from the own known records (5.4), otherwise from the device list of `m`'s account read through `m`'s link, or through the contact's link for the inviter before the first state. Members' identity keys are retained while the group is kept, so that mail from former members stays readable. A device keeps the last card of each member who went; lacking a former member's key, it reads that member's device list through this card while the link answers (9.9).
 4. Run the device check (5.5) with `own = "to"`.
 5. For mail that arrives while the device is connected, if `sv` differs from the local digest, send the full state to `m`, at most once per member per minute.
 
@@ -483,7 +483,7 @@ When the number of gone entries increases, each live member's account computes i
 ### 9.9 Leaving and removal
 
 - To remove a member, a member marks it gone, sends the full state to all live members, and sends `group` with only the gone entry to the removed member.
-- To leave, a member marks itself gone, sends the full state to all other live members, deletes its group link and removes the group from its vault. Deleting the link deletes the attachments uploaded through it.
+- To leave, a member marks itself gone, sends the full state to all other live members, closes its group link with `POST /api/links/{id}/close` and removes the group from its vault. A device whose own entry became gone closes its group link the same way. Closing deletes the link's mail and the attachments uploaded through it; the link then refuses mail but answers `GET /api/link/devices` until its server's maximum message lifetime has passed, so members can verify the last state and earlier mail, and is then deleted.
 - A device removes a group when its own entry is gone, or its group link is missing from `GET /api/links` or named in `link_revoked`.
 
 ### 9.10 Vault
@@ -527,6 +527,7 @@ Clients MUST discard payloads that fail to decrypt.
 - Removing or expiring a device MUST delete its sessions and close their connections.
 - Servers SHOULD encrypt stored vaults and wrapped keys with a secret held outside the database.
 - Servers MUST send `Cache-Control: no-store` with API responses.
+- A closed group link MUST refuse mail and SHOULD answer `GET /api/link/devices` until its `expires_at`, the server's maximum message lifetime after closing; servers then delete it. Closing deletes the link's mail and attachments at once.
 - Through a group link, servers MUST refuse calls, `DELETE /api/link`, `GET /api/link/mail`, `POST /api/link/blobs` and `blobs` in `POST /api/link/mail`, and MUST accept the previous token for 24 hours after it is replaced.
 - Servers SHOULD rate limit as listed in [api.md](api.md#limits).
 

@@ -364,7 +364,36 @@ async fn pairing_request_withdrawal_and_expiry() {
     sqlx::query("UPDATE links SET expires_at = ? WHERE id = ?").bind(now() - 1).bind(&id).execute(&s.app.db).await.unwrap();
     assert_eq!(req(&s, Method::GET, "/api/link", Auth::Link(&id, &token), None).await.0, StatusCode::GONE);
     assert_eq!(req(&s, Method::POST, &format!("/api/links/{id}/accept"), Auth::Session(&alice), None).await.0, StatusCode::GONE);
-    api::sweep_requests(&s.app).await.unwrap();
+    api::sweep_links(&s.app).await.unwrap();
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM links WHERE id = ?").bind(&id).fetch_one(&s.app.db).await.unwrap();
     assert_eq!(left, 0);
+}
+
+#[tokio::test]
+async fn closed_group_link() {
+    let s = server().await;
+    let (alice, device) = account(&s, "alice").await;
+    let token = random_token();
+    let id = group_link(&s, &alice, &token).await;
+    let link = || Auth::Link(&id, &token);
+    assert_eq!(req(&s, Method::POST, "/api/link/mail", link(), Some(mail(&device, &[]))).await.0, StatusCode::OK);
+    let up = s.http.post(format!("{}/api/links/{id}/blobs", s.base)).header("authorization", format!("Bearer {alice}")).body(vec![1u8; 16]).send().await.unwrap();
+    assert_eq!(up.status(), StatusCode::OK);
+
+    assert_eq!(req(&s, Method::POST, &format!("/api/links/{id}/close"), Auth::Session(&alice), None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(req(&s, Method::GET, "/api/link", link(), None).await.1["state"], "closed");
+    assert_eq!(req(&s, Method::GET, "/api/link/devices", link(), None).await.0, StatusCode::OK);
+    assert_eq!(req(&s, Method::POST, "/api/link/mail", link(), Some(mail(&device, &[]))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(req(&s, Method::POST, &format!("/api/links/{id}/mail"), Auth::Session(&alice), Some(mail(&device, &[]))).await.0, StatusCode::NOT_FOUND);
+    for table in ["mail", "blobs"] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE link_id = ?")).bind(&id).fetch_one(&s.app.db).await.unwrap();
+        assert_eq!(n, 0, "{table} kept after closing");
+    }
+    assert!(req(&s, Method::GET, "/api/links", Auth::Session(&alice), None).await.1.as_array().unwrap().is_empty());
+
+    sqlx::query("UPDATE links SET expires_at = ? WHERE id = ?").bind(now() - 1).bind(&id).execute(&s.app.db).await.unwrap();
+    assert_eq!(req(&s, Method::GET, "/api/link/devices", link(), None).await.0, StatusCode::GONE);
+    api::sweep_links(&s.app).await.unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM links WHERE id = ?").bind(&id).fetch_one(&s.app.db).await.unwrap();
+    assert_eq!(n, 0);
 }

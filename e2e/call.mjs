@@ -558,6 +558,16 @@ await c.getByRole('menuitemradio', { name: '1 hour' }).click()
 await b.locator('.event', { hasText: 'Carol set messages to expire after 1 hour.' }).waitFor({ timeout: 15000 })
 step('carol renamed the group and changed its timer')
 
+// alice's second device forgets its saved keys and reads nothing until carol was removed and bob has left
+let release
+const gone = new Promise((r) => (release = r))
+await a2.route('**/api/link/devices', async (r) => {
+  await gone
+  await r.continue().catch(() => {})
+})
+await a2.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('caw.contacts.')).forEach((k) => localStorage.removeItem(k)))
+await a2.reload()
+
 if (!carolLinks.length) throw new Error("no group link captured from carol's sends")
 await b.locator('.caw-head .contact-btn').click()
 const carolRow = b.locator('.group-pop .members li', { hasText: 'Carol' })
@@ -588,6 +598,12 @@ await a.keyboard.press('Enter')
 await a.locator('.msg.mine', { hasText: 'just me now' }).locator('.meta', { hasText: /left/ }).waitFor({ timeout: 15000 })
 await row(a, 'Bob').locator('.caw-item').click()
 step('bob left the group')
+
+release()
+await a2.locator('.caw-row', { hasText: 'Family' }).locator('.caw-item').click()
+for (const t of ['hello group', 'hi from the other server', 'after carol left']) await a2.locator('.bubble', { hasText: t }).waitFor({ timeout: 20000 })
+await a2.unroute('**/api/link/devices')
+step("alice's second device caught up after carol was removed and bob left, without saved keys: their closed links still listed their devices, so their earlier messages verify")
 
 // alice's server reports a device alice does not have
 const raw = (k) => Buffer.from(k.export({ format: 'jwk' }).x, 'base64url')

@@ -151,6 +151,7 @@ Session required.
 | DELETE | `/api/links/{id}` | | `204` |
 | PUT | `/api/links/{id}/token` | `{gen, token}` | `204` |
 | POST | `/api/links/{id}/accept` | | `204` |
+| POST | `/api/links/{id}/close` | | `204` |
 | POST | `/api/links/{id}/mail` | as `POST /api/link/mail` | mail |
 | POST | `/api/links/{id}/blobs` | encrypted file | `{id}` |
 | GET | `/api/mail` | | `{now, mail: [mail]}` |
@@ -160,7 +161,8 @@ Session required.
 - `POST /api/links`: `kind` is `contact` (default) or `group`. A group link's `token` is chosen by the client (32 bytes, base64url) and its peer fields are empty. `409` when the account has 1000 links.
 - `PUT /api/links/{id}/token`: group links only. A greater `gen` replaces the token; the previous token remains valid for 24 hours. The same `gen` and token again returns `204`; otherwise `409` if `gen` is not greater.
 - `POST /api/links/{id}/mail`, `POST /api/links/{id}/blobs`: the owner's copy and attachments for a group link, as the link endpoints below. The account's connections receive `mail`; no push is sent.
-- `GET /api/links`: `state` is `pending`, `accepted` or `open`; `expires_at` and `request` are present only on pairing requests. A redeemed link's peer fields are empty.
+- `GET /api/links`: `state` is `pending`, `accepted` or `open` (closed links are not listed); `expires_at` and `request` are present only on pairing requests. A redeemed link's peer fields are empty.
+- `POST /api/links/{id}/close`: closes a group link when its owner leaves the group. Its mail and attachments are deleted; the link refuses mail (`403`) but answers `GET /api/link` and `GET /api/link/devices` until the maximum message lifetime has passed, then is deleted. It no longer appears in `GET /api/links`, and the account's connections receive `link_revoked`. `404` if no group link of the account has that id.
 - `POST /api/links/{id}/accept`: accepts a pending link; the account's connections receive `requests`. `410` if the link is gone or expired.
 - `DELETE /api/links/{id}`: closes guest connections using the link; the account's connections receive `link_revoked`.
 - `GET /api/mail`: unexpired messages delivered to all of the account's links; `now` is the server time.

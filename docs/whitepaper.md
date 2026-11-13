@@ -122,7 +122,7 @@ The server relays the WebRTC session descriptions, which carry the fingerprints 
 
 A group could live on one server that stores its messages. Caw instead delivers every group message to each member's own server. Members keep receiving only from their own server, so notifications and connections are unchanged, each member's device list still comes from that member's server, and no server holds a group's traffic or depends on another operator's availability. The cost is that the sender posts one copy per member, so each server sets a maximum group size, ten by default, which its users' clients enforce.
 
-When a member leaves or is removed, every remaining member replaces its group token in place. The token is derived from a secret in the vault, so all of a member's devices compute the same one, and the previous token is accepted for 24 hours so messages already on their way arrive. A removed member's messages are discarded by the others.
+When a member leaves or is removed, every remaining member replaces its group token in place. The token is derived from a secret in the vault, so all of a member's devices compute the same one, and the previous token is accepted for 24 hours so messages already on their way arrive. A removed member's messages are discarded by the others. A member that leaves, or learns it was removed, closes its group link instead of deleting it: the link takes no more mail but keeps listing the member's devices until its messages could have expired, so members who were offline can still verify its last state and earlier messages.
 
 ## 5. Threat model
 

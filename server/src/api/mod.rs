@@ -24,7 +24,7 @@ use tower_http::{
 use crate::{error::AppError, ws, App};
 
 pub use blobs::sweep as sweep_blobs;
-pub use contacts::sweep_requests;
+pub use contacts::sweep_links;
 
 // cross-origin routes authorized by a link token; bearer only, no cookies
 fn link_routes() -> Router<Arc<App>> {
@@ -74,6 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/links/{id}", delete(contacts::revoke_link))
         .route("/api/links/{id}/token", put(contacts::set_token))
         .route("/api/links/{id}/accept", post(contacts::accept_request))
+        .route("/api/links/{id}/close", post(contacts::close_link))
         .route("/api/links/{id}/mail", post(contacts::own_mail))
         .route("/api/links/{id}/blobs", post(blobs::own_upload).layer(DefaultBodyLimit::disable()))
         .route("/api/mail", get(contacts::my_mail))
