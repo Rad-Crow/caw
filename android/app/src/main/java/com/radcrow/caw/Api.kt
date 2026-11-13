@@ -165,6 +165,10 @@ class Api(private val prefs: Prefs, private val http: OkHttpClient) {
         call("DELETE", "/api/links/$id")
     }
 
+    suspend fun closeLink(id: String) {
+        call("POST", "/api/links/$id/close", JsonObject(emptyMap()))
+    }
+
     suspend fun acceptRequest(id: String) {
         call("POST", "/api/links/$id/accept", JsonObject(emptyMap()))
     }

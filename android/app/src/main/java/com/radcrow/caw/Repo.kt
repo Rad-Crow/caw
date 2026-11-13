@@ -88,7 +88,12 @@ data class LocalGroup(
     val u: Long,
     val names: Map<String, String> = emptyMap(),
     val signers: Map<String, Map<String, String>> = emptyMap(),
+    // the last card of each member who went, so its earlier mail can still be verified
+    val former: Map<String, GroupCard> = emptyMap(),
 )
+
+private fun LocalGroup.withFormer(members: Map<String, Member>): Map<String, GroupCard> =
+    former + g.members.mapNotNull { (id, e) -> e.c?.takeIf { members[id]?.c == null }?.let { id to it } }
 
 data class GroupMember(val id: String, val name: String, val host: String, val contact: Boolean, val me: Boolean)
 
@@ -552,7 +557,7 @@ class Repo(private val app: CawApp) {
             if (e.u > local.u) editGroup(id) { it.copy(u = e.u) }
             if (merged == local.g) continue
             val old = local.g.own.linkId
-            editGroup(id) { it.copy(g = merged) }
+            editGroup(id) { it.copy(g = merged, former = it.withFormer(merged.members)) }
             if (old != merged.own.linkId) app.scope.launch { runCatching { app.api.revokeLink(old) } }
             groupsChanged = true
         }
@@ -1636,8 +1641,13 @@ class Repo(private val app: CawApp) {
         editGroup(g.g.id) { it.copy(g = it.g.copy(members = it.g.members + (it.g.me to Member(maxOf(stamp(), (mine?.u ?: 0L) + 1), gone = true)))) }
         val cur = groupById(g.g.id) ?: return
         runCatching { queueGroup(cur, stateOf(cur.g), liveCards(cur.g.members), config.value.messageTtlMax, keep = true) }
-        runCatching { app.api.revokeLink(cur.g.own.linkId) }
+        closeLink(cur.g.own.linkId)
         forgetGroup(g.g.id)
+    }
+
+    // a closed link refuses mail but still lists this account's devices, so members can verify its last state
+    private suspend fun closeLink(id: String) {
+        runCatching { app.api.closeLink(id) }.onFailure { runCatching { app.api.revokeLink(id) } }
     }
 
     private fun stateOf(g: Group) = buildJsonObject {
@@ -1805,7 +1815,13 @@ class Repo(private val app: CawApp) {
         }
         // a former member: only mail its server received before this account learned it left
         val at = g.g.left?.get(sender)
-        return if (e != null && at != null && m.createdAt <= at) g.signers[sender] else null
+        if (e == null || at == null || m.createdAt > at) return null
+        // its closed link still lists its devices for a while (docs/protocol.md, section 9.9)
+        val last = g.former[sender]
+        if (last != null && g.signers[sender]?.containsKey(m.fromDevice) != true) {
+            runCatching { memberDevices(gid, last, fresh = true) }.onFailure { if (it is Gone) editGroup(gid) { x -> x.copy(former = x.former - sender) } }
+        }
+        return groupById(gid)?.signers?.get(sender)
     }
 
     // decrypted first, since the sender is named inside; nothing is used before the signature checks out
@@ -1908,7 +1924,7 @@ class Repo(private val app: CawApp) {
             val seen = it.g.left.orEmpty()
             val left = if (r.gone.isEmpty()) it.g.left else seen + r.gone.associateWith { x -> minOf(seen[x] ?: t, t) }
             val next = it.g.copy(name = r.state.name, ttl = r.state.ttl, members = r.state.members, left = left)
-            it.copy(g = if (bootstrap) next.copy(inviter = null, own = next.own.copy(base = goneCount(next.members).toLong())) else next)
+            it.copy(g = if (bootstrap) next.copy(inviter = null, own = next.own.copy(base = goneCount(next.members).toLong())) else next, former = it.withFormer(r.state.members))
         }
         if (bootstrap) addEvent(g.num, "You joined the group.")
         cacheNames(gid)
@@ -2009,7 +2025,7 @@ class Repo(private val app: CawApp) {
 
     private fun leftGroup(gid: String, notice: String) {
         val g = groupById(gid) ?: return
-        app.scope.launch { runCatching { app.api.revokeLink(g.g.own.linkId) } }
+        app.scope.launch { closeLink(g.g.own.linkId) }
         forgetGroup(gid, notice)
     }
 

@@ -80,7 +80,8 @@ export interface Prompt {
   expires_at: number
 }
 
-export type LocalGroup = Group & { num: number; u: number; names?: Record<string, string>; signers?: Record<string, Record<string, string>> }
+// former: the last card of each member who went, kept locally so its earlier mail can still be verified
+export type LocalGroup = Group & { num: number; u: number; names?: Record<string, string>; signers?: Record<string, Record<string, string>>; former?: Record<string, GroupCard> }
 
 export interface GroupPrompt {
   contact: string
@@ -161,7 +162,12 @@ function syncedGroup(g: LocalGroup): Group {
   delete s.u
   delete s.names
   delete s.signers
+  delete s.former
   return s as Group
+}
+
+function keepFormer(g: LocalGroup, members: Group['members']) {
+  for (const [id, e] of Object.entries(g.members)) if (isLive(e) && !isLive(members[id])) g.former = { ...(g.former ?? {}), [id]: $state.snapshot(e.c) }
 }
 
 export function plainText(p: Plain): string {
@@ -755,6 +761,7 @@ class Store {
       if (e.u > local.u) local.u = e.u
       if (canon(merged) === canon(mine)) continue
       const old = local.own.link_id
+      keepFormer(local, merged.members)
       Object.assign(local, merged)
       if (!merged.inviter) delete local.inviter
       if (old !== local.own.link_id) api.del(`/api/links/${old}`).catch(() => {})
@@ -1856,8 +1863,13 @@ class Store {
     const mine = g.members[g.me]
     g.members[g.me] = { u: Math.max(this.stamp(), (mine?.u ?? 0) + 1), gone: true }
     await this.queueGroup(g, this.stateOf(g), liveCards(g), this.config.message_ttl_max, undefined, true).catch(() => {})
-    await api.del(`/api/links/${g.own.link_id}`).catch(() => {})
+    await this.closeLink(g.own.link_id)
     this.forgetGroup(g)
+  }
+
+  // a closed link refuses mail but still lists this account's devices, so members can verify its last state
+  private closeLink(id: string): Promise<unknown> {
+    return api.post(`/api/links/${id}/close`).catch(() => api.del(`/api/links/${id}`).catch(() => {}))
   }
 
   private stateOf(g: LocalGroup): GroupState {
@@ -1999,7 +2011,15 @@ class Store {
     }
     // a former member: only mail its server received before this account learned it left
     const at = g.left?.[sender]
-    return e && at !== undefined && m.created_at <= at ? (g.signers?.[sender] ?? null) : null
+    if (!e || at === undefined || m.created_at > at) return null
+    // its closed link still lists its devices for a while (docs/protocol.md, section 9.9)
+    const last = g.former?.[sender]
+    if (last && !g.signers?.[sender]?.[m.from_device]) {
+      await this.memberDevices(g.id, last, true).catch((err) => {
+        if (err instanceof Gone && g.former) delete g.former[sender]
+      })
+    }
+    return g.signers?.[sender] ?? null
   }
 
   // decrypted first, since the sender is named inside; nothing is used before the signature checks out
@@ -2094,6 +2114,7 @@ class Store {
     } else if (canon(r.state) === canon({ name: g.name, ttl: g.ttl, members: $state.snapshot(g.members) })) {
       return
     }
+    keepFormer(g, r.state.members)
     const who = this.memberName(g.num, sender)
     g.name = r.state.name
     g.ttl = r.state.ttl
@@ -2193,7 +2214,7 @@ class Store {
   }
 
   private leftGroup(g: LocalGroup, notice: string) {
-    api.del(`/api/links/${g.own.link_id}`).catch(() => {})
+    this.closeLink(g.own.link_id)
     this.forgetGroup(g, notice)
   }
 
