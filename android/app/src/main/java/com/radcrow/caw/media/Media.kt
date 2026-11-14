@@ -94,16 +94,11 @@ class Media(private val app: CawApp) {
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
-    private fun rotation(uri: Uri): Int = runCatching {
+    private fun orientation(uri: Uri): Int = runCatching {
         app.contentResolver.openInputStream(uri)!!.use {
-            when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                else -> 0
-            }
+            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
         }
-    }.getOrDefault(0)
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
 
     // re-encoding strips EXIF, so location and camera metadata never leave the device
     private fun prepareImage(uri: Uri): Prepared {
@@ -116,9 +111,24 @@ class Media(private val app: CawApp) {
         val raw = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
             ?: throw IOException("Could not read the image.")
         val s = min(1f, IMAGE_MAX.toFloat() / max(raw.width, raw.height))
+        // BitmapFactory ignores EXIF orientation
         val m = Matrix().apply {
             postScale(s, s)
-            postRotate(rotation(uri).toFloat())
+            when (orientation(uri)) {
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> postScale(-1f, 1f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> postRotate(180f)
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> postScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> {
+                    postRotate(90f)
+                    postScale(-1f, 1f)
+                }
+                ExifInterface.ORIENTATION_ROTATE_90 -> postRotate(90f)
+                ExifInterface.ORIENTATION_TRANSVERSE -> {
+                    postRotate(270f)
+                    postScale(-1f, 1f)
+                }
+                ExifInterface.ORIENTATION_ROTATE_270 -> postRotate(270f)
+            }
         }
         val bmp = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
         val webp = Build.VERSION.SDK_INT >= 30

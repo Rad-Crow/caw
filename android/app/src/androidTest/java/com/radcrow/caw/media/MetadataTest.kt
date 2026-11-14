@@ -1,5 +1,8 @@
 package com.radcrow.caw.media
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import androidx.core.content.FileProvider
@@ -71,6 +74,35 @@ class MetadataTest {
         assertFalse("make", t.contains("CawTest"))
     }
 
+    // rotated.jpg is stored 96x48 with a red block top left; its orientation tag is rewritten to each value
+    @Test
+    fun photoOrientation(): Unit = runBlocking {
+        val src = fixture("rotated.jpg")
+        val bytes = src.readBytes()
+        val at = text(src).indexOf("\u0012\u0001\u0003\u0000") + 8
+        assertEquals(6, bytes[at].toInt())
+        val wrong = (1..8).mapNotNull { o ->
+            bytes[at] = o.toByte()
+            src.writeBytes(bytes)
+            val p = app.media.prepare(uri(src), Long.MAX_VALUE) {}
+            made += p.file
+            val b = BitmapFactory.decodeFile(p.file.path)
+            val want = (if (o < 5) "96x48 " else "48x96 ") + CORNERS[(o - 1) % 4]
+            val got = "${b.width}x${b.height} ${redCorners(b).joinToString("+")}"
+            if (got == want && p.w == b.width && p.h == b.height) null else "$o: $got, want $want"
+        }
+        assertEquals(emptyList<String>(), wrong)
+    }
+
+    private fun redCorners(b: Bitmap): List<String> {
+        val m = 6
+        val at = listOf(m to m, b.width - 1 - m to m, b.width - 1 - m to b.height - 1 - m, m to b.height - 1 - m)
+        return CORNERS.filterIndexed { i, _ ->
+            val c = b.getPixel(at[i].first, at[i].second)
+            Color.red(c) > 200 && Color.green(c) < 90 && Color.blue(c) < 90
+        }
+    }
+
     @Test
     fun transcodedVideo(): Unit = runBlocking {
         val src = fixture("location.mp4")
@@ -91,5 +123,6 @@ class MetadataTest {
 
     private companion object {
         const val LOCATION = "+40.6892-074.0445/"
+        val CORNERS = listOf("top left", "top right", "bottom right", "bottom left")
     }
 }
