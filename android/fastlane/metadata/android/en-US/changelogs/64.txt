@@ -1,0 +1,4 @@
+Settings has a Theme section with Appearance and Audio. Audio offers Classic or Crow sounds for calls and new messages.
+Classic uses Caw's own ringtone and message sound instead of the phone's defaults. A custom sound or Do Not Disturb override set for Caw's notifications has to be set again.
+A tone plays when a call ends.
+With an up-to-date Caw server, devices that catch up after someone left a group, or was removed, still show that member's earlier messages.
