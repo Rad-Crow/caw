@@ -11,6 +11,7 @@
 | `deploy/` | coturn and Caddy configuration, container entrypoint |
 | `e2e/` | browser end-to-end test |
 | `examples/` | `.env` templates |
+| `tools/` | `sounds.py` renders the call and message sounds for both clients (needs ffmpeg) |
 | `docs/` | white paper, protocol specification, API reference, guides, screenshots |
 
 ## Running locally

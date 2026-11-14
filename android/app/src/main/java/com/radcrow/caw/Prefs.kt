@@ -43,6 +43,10 @@ class Prefs(context: Context) {
         get() = sp.getString("theme", null) ?: "system"
         set(v) = sp.edit { putString("theme", v) }
 
+    var sounds: String
+        get() = sp.getString("sounds", null) ?: "classic"
+        set(v) = sp.edit { putString("sounds", v) }
+
     var privateCalls: Boolean
         get() = sp.getBoolean("private_calls", false)
         set(v) = sp.edit { putBoolean("private_calls", v) }

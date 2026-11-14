@@ -7,6 +7,7 @@
   import { privateCalls, privateMessages, setPrivateCalls, setPrivateMessages } from '../lib/prefs'
   import { store } from '../lib/store.svelte'
   import { getTheme, setTheme, type Theme } from '../lib/theme'
+  import { getSoundTheme, setSoundTheme, tones, type SoundTheme } from '../lib/tones'
   import Icon from '../lib/Icon.svelte'
 
   onMount(() => store.refreshDevices().catch((e) => store.flash(errText(e))))
@@ -27,6 +28,7 @@
   let display_name = $state(store.me?.display_name ?? '')
   let denoise = $state(denoiseOn())
   let theme = $state<Theme>(getTheme())
+  let sounds = $state<SoundTheme>(getSoundTheme())
   let privCalls = $state(privateCalls())
   let privMessages = $state(privateMessages())
   let notifyState = $state('Notification' in window ? Notification.permission : 'unsupported')
@@ -43,6 +45,11 @@
 
   async function enableNotifications() {
     notifyState = await Notification.requestPermission()
+  }
+
+  function chooseSounds(t: SoundTheme) {
+    setSoundTheme((sounds = t))
+    tones.message()
   }
 </script>
 
@@ -103,16 +110,34 @@
   </section>
 
   <section class="card">
-    <h2>Appearance</h2>
-    <div class="segmented" role="radiogroup" aria-label="Theme">
-      {#each [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']] as [value, label] (value)}
-        <button
-          role="radio"
-          aria-checked={theme === value}
-          class:on={theme === value}
-          onclick={() => setTheme((theme = value as Theme))}>{label}</button
-        >
-      {/each}
+    <h2>Theme</h2>
+    <div class="stack">
+      <div class="field">
+        <span class="muted small" id="theme-appearance">Appearance</span>
+        <div class="segmented" role="radiogroup" aria-labelledby="theme-appearance">
+          {#each [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']] as [value, label] (value)}
+            <button
+              role="radio"
+              aria-checked={theme === value}
+              class:on={theme === value}
+              onclick={() => setTheme((theme = value as Theme))}>{label}</button
+            >
+          {/each}
+        </div>
+      </div>
+      <div class="field">
+        <span class="muted small" id="theme-audio">Audio</span>
+        <div class="segmented" role="radiogroup" aria-labelledby="theme-audio">
+          {#each [['classic', 'Classic'], ['crow', 'Crow']] as [value, label] (value)}
+            <button
+              role="radio"
+              aria-checked={sounds === value}
+              class:on={sounds === value}
+              onclick={() => chooseSounds(value as SoundTheme)}>{label}</button
+            >
+          {/each}
+        </div>
+      </div>
     </div>
   </section>
 

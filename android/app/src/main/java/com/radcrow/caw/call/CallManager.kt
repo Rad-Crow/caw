@@ -5,7 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.SystemClock
 import android.telecom.DisconnectCause
@@ -98,9 +98,11 @@ class CallManager(private val app: CawApp) {
     private var source: AudioSource? = null
     private var track: AudioTrack? = null
     private var ice: List<PeerConnection.IceServer> = emptyList()
-    private var tone: ToneGenerator? = null
+    private var ringback: MediaPlayer? = null
     private var focus: AudioFocusRequest? = null
     private var reason = "hangup"
+    private var ending: (() -> Unit)? = null
+    private var endTimer: Job? = null
 
     init {
         CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
@@ -124,6 +126,7 @@ class CallManager(private val app: CawApp) {
 
     fun call(user: Peer) = post {
         if (busy) return@post
+        finishEnding()
         val c = app.repo.contact(user.id)?.takeIf { it.status == "active" }
         if (c == null) {
             notices.tryEmit("This contact is not available.")
@@ -286,7 +289,7 @@ class CallManager(private val app: CawApp) {
         val a = active.value ?: return
         send(simple("hangup", a.id))
         reason = "hangup"
-        cleanup()
+        cleanup(tone = true)
     }
 
     private suspend fun process(e: JsonObject, fromGuest: Boolean) {
@@ -311,6 +314,7 @@ class CallManager(private val app: CawApp) {
                 val c = app.repo.contacts.value.find { it.inLink == e.str("link_id") && it.status == "active" }
                 // another of the account's devices may still take it
                 if (busy || c == null) return
+                finishEnding()
                 val from = app.repo.peer(c)
                 incoming.value = Incoming(callId, from)
                 Notifications.incoming(app, callId, from.copy(name = app.repo.nameFor(from)))
@@ -381,7 +385,7 @@ class CallManager(private val app: CawApp) {
                 }
                 if (mine) {
                     reason = e.str("reason") ?: "hangup"
-                    cleanup()
+                    cleanup(tone = true)
                     notices.tryEmit(REASONS[e.str("reason")] ?: "Call ended")
                 }
             }
@@ -561,7 +565,7 @@ class CallManager(private val app: CawApp) {
         val a = active.value ?: return
         send(simple("hangup", a.id))
         reason = "lost"
-        cleanup()
+        cleanup(tone = true)
         notices.tryEmit(REASONS.getValue("lost"))
     }
 
@@ -572,7 +576,7 @@ class CallManager(private val app: CawApp) {
         }
     }
 
-    private fun cleanup() {
+    private fun cleanup(tone: Boolean = false) {
         guestJob?.cancel()
         guestJob = null
         guest?.dispose()
@@ -593,11 +597,31 @@ class CallManager(private val app: CawApp) {
         source?.dispose()
         track = null
         source = null
-        stopAudio()
-        if (active.value != null) app.telecom.end(if (why == "hangup") DisconnectCause.LOCAL else DisconnectCause.REMOTE)
+        val cause = active.value?.let { if (why == "hangup") DisconnectCause.LOCAL else DisconnectCause.REMOTE }
         active.value = null
-        CallService.stop(app)
-        app.repo.idleCheck()
+        finishEnding()
+        ending = {
+            stopAudio()
+            cause?.let { app.telecom.end(it) }
+            CallService.stop(app)
+            app.repo.idleCheck()
+        }
+        val sound = if (tone) Sounds.play(app, "hangup", Sounds.VOICE) else null
+        if (sound == null) return finishEnding()
+        val ms = runCatching { sound.duration }.getOrDefault(0).coerceIn(0, 2000) + 100L
+        // the call's audio route stays until the tone has played
+        endTimer = timers.launch {
+            delay(ms)
+            post { finishEnding() }
+        }
+    }
+
+    // also runs before a new call starts, since telecom.end() ends whichever call is current
+    private fun finishEnding() {
+        endTimer?.cancel()
+        endTimer = null
+        ending?.invoke()
+        ending = null
     }
 
     private fun send(obj: JsonObject) = if (viaGuest) guest?.send(obj) ?: false else app.socket.send(obj)
@@ -629,7 +653,7 @@ class CallManager(private val app: CawApp) {
         val a = active.value ?: return
         send(simple("hangup", a.id))
         reason = "unverified"
-        cleanup()
+        cleanup(tone = true)
         notices.tryEmit(REASONS.getValue("unverified"))
     }
 
@@ -668,14 +692,12 @@ class CallManager(private val app: CawApp) {
 
     private fun startTone() {
         stopTone()
-        tone = runCatching { ToneGenerator(AudioManager.STREAM_VOICE_CALL, 70) }.getOrNull()
-        tone?.startTone(ToneGenerator.TONE_SUP_RINGTONE)
+        ringback = Sounds.play(app, "ringback", Sounds.VOICE, loop = true)
     }
 
     private fun stopTone() {
-        tone?.stopTone()
-        tone?.release()
-        tone = null
+        ringback?.release()
+        ringback = null
     }
 
     private open class SdpAdapter : SdpObserver {
