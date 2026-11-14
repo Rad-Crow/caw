@@ -3,4 +3,8 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+
+    <style name="Theme.Caw.Camera">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
 </resources>

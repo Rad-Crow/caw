@@ -78,7 +78,7 @@
   // shares the image for scanning and the text for pasting; targets use what they support
   async function share() {
     if (!code) return
-    const text = `Add me on Caw. Scan the code, or in Add contact choose Enter a code and paste this:\n\n${code}`
+    const text = `Add me on Caw: scan the QR code with Caw, or paste this invite into Caw.\n\n${code}`
     try {
       const blob = await png()
       const files = blob ? [new File([blob], 'caw-code.png', { type: 'image/png' })] : []

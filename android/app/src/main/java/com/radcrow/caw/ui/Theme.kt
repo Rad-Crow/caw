@@ -34,10 +34,10 @@ import androidx.compose.ui.unit.sp
 val Online = Color(0xFF16A34A)
 
 @Composable
-fun CawTheme(content: @Composable () -> Unit) {
+fun CawTheme(alwaysDark: Boolean = false, content: @Composable () -> Unit) {
     val ctx = LocalContext.current
     val theme by ctx.app.theme.collectAsStateWithLifecycle()
-    val dark = when (theme) {
+    val dark = alwaysDark || when (theme) {
         "light" -> false
         "dark" -> true
         else -> isSystemInDarkTheme()

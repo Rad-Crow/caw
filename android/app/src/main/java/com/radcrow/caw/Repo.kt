@@ -777,10 +777,10 @@ class Repo(private val app: CawApp) {
     // requesting side: only the ticket and a name go out; the link, card and keys follow once they accept
     suspend fun enterCode(text: String): Pair<Long, List<String>> {
         app.sealed.device ?: throw IOException(deviceError.value ?: "This device is not set up yet.")
-        if (text.trim().startsWith(Code.OLD_PREFIX)) throw IOException("This code is from an older version of Caw. Ask them to update the app.")
-        val code = Code.decode(text) ?: throw IOException("That isn't a Caw code.")
+        if (text.trim().startsWith(Code.OLD_PREFIX)) throw IOException("This invite is from an older version of Caw. Ask them to update the app.")
+        val code = Code.decode(text) ?: throw IOException("That isn't a Caw invite.")
         val user = me.value!!
-        if (code.s == ownServer() && code.a == user.id.toString()) throw IOException("That's your own code.")
+        if (code.s == ownServer() && code.a == user.id.toString()) throw IOException("That's your own invite.")
         if (contacts.value.any { it.s.account == code.a && normServer(it.server) == code.s }) throw IOException("Already a contact.")
         val request = code.k?.let { k ->
             val name = buildJsonObject { put("name", user.displayName) }.toString().toByteArray()

@@ -51,6 +51,13 @@ android {
         compose = true
     }
 
+    // bouncycastle and jspecify both ship this file
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+
     // the verification word list is shared with the web app
     val protocol = rootProject.file("../protocol")
     check(protocol.resolve("words.txt").exists()) { "missing ../protocol/words.txt, build from the full repo" }
@@ -86,6 +93,8 @@ dependencies {
     implementation(libs.media3.effect)
     implementation(libs.media3.common)
     implementation(libs.media3.muxer)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.view)
     implementation(libs.work)
     implementation(libs.zxing)
     testImplementation(libs.junit)

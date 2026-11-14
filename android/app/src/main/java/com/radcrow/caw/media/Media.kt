@@ -70,10 +70,12 @@ fun fmtDur(s: Long) = "%d:%02d".format(s / 60, s % 60)
 class Media(private val app: CawApp) {
     private val cacheDir = File(app.cacheDir, "media").apply { mkdirs() }
     private val outDir = File(app.cacheDir, "outgoing").apply { mkdirs() }
+    val captures = File(app.cacheDir, "camera").apply { mkdirs() }
     private val locks = HashMap<String, Mutex>()
 
     init {
         outDir.listFiles()?.forEach { it.delete() }
+        captures.listFiles()?.forEach { it.delete() }
     }
 
     suspend fun prepare(uri: Uri, limit: Long, onProgress: (Float) -> Unit): Prepared {
@@ -102,15 +104,25 @@ class Media(private val app: CawApp) {
 
     // re-encoding strips EXIF, so location and camera metadata never leave the device
     private fun prepareImage(uri: Uri): Prepared {
+        val bmp = upright(uri, IMAGE_MAX)
+        val webp = Build.VERSION.SDK_INT >= 30
+        val file = File.createTempFile("img", if (webp) ".webp" else ".jpg", outDir)
+        file.outputStream().use {
+            if (webp) bmp.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, it) else bmp.compress(Bitmap.CompressFormat.JPEG, 82, it)
+        }
+        return Prepared("image", if (webp) "image/webp" else "image/jpeg", file, bmp.width, bmp.height, null, thumbOf(bmp))
+    }
+
+    fun upright(uri: Uri, maxPx: Int): Bitmap {
         val cr = app.contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0) throw IOException("Could not read the image.")
         var sample = 1
-        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= IMAGE_MAX) sample *= 2
+        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxPx) sample *= 2
         val raw = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
             ?: throw IOException("Could not read the image.")
-        val s = min(1f, IMAGE_MAX.toFloat() / max(raw.width, raw.height))
+        val s = min(1f, maxPx.toFloat() / max(raw.width, raw.height))
         // BitmapFactory ignores EXIF orientation
         val m = Matrix().apply {
             postScale(s, s)
@@ -130,13 +142,7 @@ class Media(private val app: CawApp) {
                 ExifInterface.ORIENTATION_ROTATE_270 -> postRotate(270f)
             }
         }
-        val bmp = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
-        val webp = Build.VERSION.SDK_INT >= 30
-        val file = File.createTempFile("img", if (webp) ".webp" else ".jpg", outDir)
-        file.outputStream().use {
-            if (webp) bmp.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, it) else bmp.compress(Bitmap.CompressFormat.JPEG, 82, it)
-        }
-        return Prepared("image", if (webp) "image/webp" else "image/jpeg", file, bmp.width, bmp.height, null, thumbOf(bmp))
+        return Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
     }
 
     private class Info(val w: Int, val h: Int, val dur: Long, val frame: Bitmap?)
@@ -292,6 +298,7 @@ class Media(private val app: CawApp) {
     fun clear() {
         cacheDir.listFiles()?.forEach { it.delete() }
         outDir.listFiles()?.forEach { it.delete() }
+        captures.listFiles()?.forEach { it.delete() }
     }
 
     companion object {

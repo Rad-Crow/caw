@@ -2,6 +2,7 @@ package com.radcrow.caw.ui
 
 import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -41,9 +42,9 @@ import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
@@ -51,18 +52,23 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -79,6 +85,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -135,7 +142,16 @@ fun Root(activity: MainActivity) {
     var chatWith by rememberSaveable { mutableStateOf<Long?>(null) }
     var setupBack by rememberSaveable { mutableStateOf("home") }
     var adding by rememberSaveable { mutableStateOf<Long?>(null) }
+    var scanned by rememberSaveable { mutableStateOf<String?>(null) }
+    var scans by rememberSaveable { mutableIntStateOf(0) }
     val openUser by activity.openUser.collectAsStateWithLifecycle()
+    val scan = rememberLauncherForActivityResult(CameraActivity.Scan()) { text ->
+        if (text != null) {
+            scanned = text
+            scans++
+            screen = "scan"
+        }
+    }
 
     LaunchedEffect(openUser) {
         openUser?.let {
@@ -174,7 +190,11 @@ fun Root(activity: MainActivity) {
                 screen = "setup"
             },
         )
-        screen == "add" -> AddContactScreen(
+        screen == "share" -> ShareInviteScreen(onBack = { screen = "home" })
+        screen == "scan" -> ScanInviteScreen(
+            scanned,
+            scans,
+            onScan = { scan.launch(Unit) },
             onAdded = {
                 screen = "home"
                 chatWith = it
@@ -196,7 +216,8 @@ fun Root(activity: MainActivity) {
                 app.repo.composeFor.value = it
                 chatWith = it
             },
-            onAdd = { screen = "add" },
+            onScan = { scan.launch(Unit) },
+            onShare = { screen = "share" },
             onGroup = { screen = "group" },
             onSettings = { screen = "settings" },
             onSetup = {
@@ -278,7 +299,8 @@ fun HomeScreen(
     activity: MainActivity,
     onOpen: (Long) -> Unit,
     onMessage: (Long) -> Unit,
-    onAdd: () -> Unit,
+    onScan: () -> Unit,
+    onShare: () -> Unit,
     onGroup: () -> Unit,
     onSettings: () -> Unit,
     onSetup: () -> Unit,
@@ -318,19 +340,35 @@ fun HomeScreen(
             )
         },
         floatingActionButton = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                ExtendedFloatingActionButton(
-                    onClick = onGroup,
-                    icon = { Icon(Icons.Default.Group, null) },
-                    text = { Text("New group") },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                ExtendedFloatingActionButton(
-                    onClick = onAdd,
-                    icon = { Icon(Icons.Default.PersonAdd, null) },
-                    text = { Text("Add contact") },
-                )
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                FloatingActionButton(onClick = { menu = true }) { Icon(Icons.Default.Add, "Add") }
+                DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Scan invite") },
+                        onClick = {
+                            menu = false
+                            onScan()
+                        },
+                        leadingIcon = { Icon(Icons.Default.QrCodeScanner, null) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Share invite") },
+                        onClick = {
+                            menu = false
+                            onShare()
+                        },
+                        leadingIcon = { Icon(Icons.Default.QrCode, null) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Create group") },
+                        onClick = {
+                            menu = false
+                            onGroup()
+                        },
+                        leadingIcon = { Icon(Icons.Default.GroupAdd, null) },
+                    )
+                }
             }
         },
     ) { pad ->
@@ -345,7 +383,7 @@ fun HomeScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(50),
             )
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 160.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
                 item { SetupNotice(setup, onSetup) }
                 items(ids, key = { it }) { id ->
                     val grp = groups.any { it.num == id }
@@ -433,14 +471,15 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onAd
     val composeFor by app.repo.composeFor.collectAsStateWithLifecycle()
     val attachments by app.repo.attachments.collectAsStateWithLifecycle()
     val attachment = attachments[userId]
-    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
-            scope.launch {
-                runCatching { app.repo.attach(userId, uri) }
-                    .onFailure { Toast.makeText(activity, it.message ?: "Could not attach the file.", Toast.LENGTH_LONG).show() }
-            }
-        }
+    fun attach(uri: Uri, captured: Boolean) = scope.launch {
+        runCatching { app.repo.attach(userId, uri) }
+            .onFailure { Toast.makeText(activity, it.message ?: "Could not attach the file.", Toast.LENGTH_LONG).show() }
+        if (captured) app.contentResolver.delete(uri, null, null)
     }
+    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) attach(uri, false) }
+    val capture = rememberLauncherForActivityResult(CameraActivity.Capture()) { uri -> if (uri != null) attach(uri, true) }
+    val hasCamera = remember { activity.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
+    var attachOpen by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val contact = contacts.find { it.num == userId }
     val grp = groups.find { it.num == userId }
@@ -671,10 +710,39 @@ fun ChatScreen(userId: Long, activity: MainActivity, onDevices: () -> Unit, onAd
             }
             attachment?.let { a -> AttachmentBar(a) { app.repo.detach(userId) } }
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    enabled = canSend && attachment == null,
-                    onClick = { pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
-                ) { Icon(Icons.Default.AttachFile, "Attach photo or video") }
+                Box {
+                    val pick = { pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
+                    IconButton(
+                        enabled = canSend && attachment == null,
+                        onClick = { if (hasCamera) attachOpen = true else pick() },
+                    ) { Icon(Icons.Default.AttachFile, "Attach photo or video") }
+                    DropdownMenu(attachOpen, { attachOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Photo or video") },
+                            onClick = {
+                                attachOpen = false
+                                pick()
+                            },
+                            leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Take photo") },
+                            onClick = {
+                                attachOpen = false
+                                capture.launch(false)
+                            },
+                            leadingIcon = { Icon(Icons.Default.PhotoCamera, null) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Record video") },
+                            onClick = {
+                                attachOpen = false
+                                capture.launch(true)
+                            },
+                            leadingIcon = { Icon(Icons.Default.Videocam, null) },
+                        )
+                    }
+                }
                 OutlinedTextField(
                     draft,
                     { v -> app.repo.drafts.value = app.repo.drafts.value + (userId to v) },

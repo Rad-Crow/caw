@@ -171,6 +171,10 @@ data class Code(val v: Int, val s: String, val t: String, val a: String, val n: 
     companion object {
         private const val PREFIX = "caw:2:"
         const val OLD_PREFIX = "caw:1:"
+        private val ANY = Regex("caw:[0-9]+:[A-Za-z0-9_-]+")
+
+        // a code of any version inside other text, such as a whole share message
+        fun find(text: String): String? = ANY.find(text)?.value
 
         fun decode(text: String): Code? {
             val t = text.trim()
