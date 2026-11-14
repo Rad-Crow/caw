@@ -992,7 +992,7 @@ class Repo(private val app: CawApp) {
         }
         val sorted = grouped.filterValues { it.isNotEmpty() }.mapValues { (_, l) -> l.sortedBy { it.raw.createdAt } }
         messages.value = sorted
-        app.media.keepOnly(sorted.values.flatten().mapNotNull { it.plain?.blob }.toSet())
+        app.media.keepOnly((sorted.values.flatten().mapNotNull { it.plain?.blob } + outbox.value.flatMap { it.blobs }).toSet())
         if (!notify) return@withLock
         for ((other, list) in sorted) {
             val key = "notified.$uid.$other"
@@ -1381,12 +1381,14 @@ class Repo(private val app: CawApp) {
             val (body, key) = withContext(Dispatchers.IO) { app.media.encrypt(p.file.readBytes()) }
             val progress = { x: Float -> setAttachment(to, a.copy(status = "sending", progress = x)) }
             val blob = if (g != null) app.api.ownUpload(g.g.own.linkId, body, progress) else app.api.linkUpload(c!!, body, progress)
+            // cached before sending: an own group message is shown before the server can serve its file
+            app.media.keep(blob, key, p, if (g != null) null else c)
             val plain = Plain(
                 "media", text = text.ifBlank { null }, kind = p.kind, mime = p.mime, blob = blob, key = key,
                 size = p.size, w = p.w, h = p.h, dur = p.dur, thumb = p.thumb,
             )
             send(to, plain, listOf(blob))
-            app.media.keep(blob, key, p, if (g != null) null else c)
+            p.file.delete()
             setAttachment(to, null)
         } catch (e: Gone) {
             setAttachment(to, a)

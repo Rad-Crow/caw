@@ -256,8 +256,12 @@ class Media(private val app: CawApp) {
     }
 
     // sent files are kept as the local copy so a sent attachment is not downloaded again
-    fun keep(blob: String, key: String, p: Prepared, from: Remote?) {
-        if (!p.file.renameTo(cached(blob, key, from))) p.file.delete()
+    suspend fun keep(blob: String, key: String, p: Prepared, from: Remote?) {
+        withContext(Dispatchers.IO) {
+            val f = cached(blob, key, from)
+            val tmp = File(cacheDir, "${f.name}.part")
+            if (runCatching { p.file.copyTo(tmp, overwrite = true) }.isSuccess) tmp.renameTo(f) else tmp.delete()
+        }
     }
 
     suspend fun file(p: Plain, sentTo: Remote? = null): File {
