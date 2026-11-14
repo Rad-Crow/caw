@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.PersonAdd
@@ -86,6 +87,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -101,6 +103,8 @@ import com.radcrow.caw.CawEvent
 import com.radcrow.caw.Message
 import com.radcrow.caw.app
 import com.radcrow.caw.Remote
+import com.radcrow.caw.call.Notifications
+import com.radcrow.caw.call.Sounds
 import com.radcrow.caw.fmtLeft
 import com.radcrow.caw.fmtTtl
 import com.radcrow.caw.sealed.OwnDevice
@@ -813,6 +817,40 @@ private fun PrivateSwitch(
     )
 }
 
+@Composable
+private fun ChoiceItem(icon: ImageVector, title: String, options: Map<String, String>, value: String, onChoose: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    ListItem(
+        modifier = Modifier.clickable { open = true },
+        leadingContent = { Icon(icon, null) },
+        headlineContent = { Text(title) },
+        supportingContent = { Text(options[value].orEmpty()) },
+    )
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text(title) },
+            text = {
+                Column {
+                    options.forEach { (v, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                onChoose(v)
+                                open = false
+                            }.padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = value == v, onClick = null)
+                            Text(label, Modifier.padding(start = 12.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(activity: MainActivity, onBack: () -> Unit, onSetup: () -> Unit) {
@@ -869,39 +907,21 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit, onSetup: () -> Un
             }
 
             item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
-            item { SectionTitle("Appearance") }
+            item { SectionTitle("Theme") }
             item {
                 val theme by app.theme.collectAsStateWithLifecycle()
-                var open by remember { mutableStateOf(false) }
-                ListItem(
-                    modifier = Modifier.clickable { open = true },
-                    leadingContent = { Icon(Icons.Default.Palette, null) },
-                    headlineContent = { Text("Theme") },
-                    supportingContent = { Text(THEMES.getValue(theme)) },
-                )
-                if (open) {
-                    AlertDialog(
-                        onDismissRequest = { open = false },
-                        title = { Text("Theme") },
-                        text = {
-                            Column {
-                                THEMES.forEach { (value, label) ->
-                                    Row(
-                                        Modifier.fillMaxWidth().clickable {
-                                            app.prefs.theme = value
-                                            app.theme.value = value
-                                            open = false
-                                        }.padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        RadioButton(selected = theme == value, onClick = null)
-                                        Text(label, Modifier.padding(start = 12.dp))
-                                    }
-                                }
-                            }
-                        },
-                        confirmButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
-                    )
+                ChoiceItem(Icons.Default.Palette, "Appearance", THEMES, theme) {
+                    app.prefs.theme = it
+                    app.theme.value = it
+                }
+            }
+            item {
+                var sounds by remember { mutableStateOf(Sounds.theme(ctx)) }
+                ChoiceItem(Icons.AutoMirrored.Filled.VolumeUp, "Audio", Sounds.THEMES, sounds) {
+                    app.prefs.sounds = it
+                    sounds = it
+                    Notifications.createChannels(app)
+                    Sounds.play(app, "message", Sounds.NOTIFY)
                 }
             }
 

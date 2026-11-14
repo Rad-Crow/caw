@@ -403,6 +403,14 @@ const videoLeft = await gpsVid.evaluate(received, ['+40.6892-074.0445/', '\xA9xy
 if (videoLeft.found.length) throw new Error(`video kept metadata: ${videoLeft.found}`)
 step(`photo and video metadata dropped before sending (video ${videoLeft.vp9 ? 'remuxed' : 'transcoded'})`)
 
+const crowUrls = new Set()
+b.on('response', (r) => { if (/\/crow-\w+-[\w-]+\.mp3$/.test(r.url())) crowUrls.add(r.url()) })
+await b.getByRole('button', { name: /Bob/ }).click()
+await b.getByRole('menuitem', { name: 'Account' }).click()
+await b.getByRole('radio', { name: 'Crow' }).click()
+await b.waitForFunction(() => localStorage.getItem('caw.sounds') === 'crow')
+await b.goBack()
+
 await a.getByRole('button', { name: 'Call', exact: true }).click()
 await b.getByRole('button', { name: 'Answer' }).waitFor({ timeout: 5000 })
 await b.screenshot({ path: '/out/incoming.png' })
@@ -433,6 +441,16 @@ await b.locator('.callbar').waitFor({ state: 'detached' })
 await b.locator('.event', { hasText: /Incoming call . \d+:\d\d/ }).waitFor()
 await a.locator('.event', { hasText: /Outgoing call . \d+:\d\d/ }).waitFor()
 step('hangup propagated, call note on both sides')
+
+for (let i = 0; i < 50 && crowUrls.size < 3; i++) await b.waitForTimeout(100)
+const crowPlayed = await b.evaluate(async (urls) => {
+  const ctx = new OfflineAudioContext(1, 1, 48000)
+  const out = []
+  for (const u of urls) out.push(`${u.match(/crow-(\w+)-/)[1]} ${(await ctx.decodeAudioData(await (await fetch(u)).arrayBuffer())).duration.toFixed(2)} s`)
+  return out.sort()
+}, [...crowUrls])
+if (!['hangup', 'message', 'ring'].every((n) => crowPlayed.some((s) => s.startsWith(`${n} `)))) throw new Error(`crow sounds not played: ${crowPlayed}`)
+step(`bob chose the crow sounds; selecting, ringing and hanging up loaded and decoded them (${crowPlayed.join(', ')})`)
 
 await a.getByRole('button', { name: 'Call', exact: true }).click()
 await b.getByRole('button', { name: 'Decline' }).click()
