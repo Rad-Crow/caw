@@ -326,7 +326,7 @@ All devices of the receiving account process control messages; vault timestamps 
 3. Send a `media` message carrying the blob id and `key`, with `blobs: [<blob id>]` in the POST body. `blobs` is not signed.
 4. The recipient account downloads with `GET /api/blobs/{id}`; the sender's devices with `GET /api/link/blobs/{id}`.
 
-Clients SHOULD reduce images to 1600 pixels on the longest side and SHOULD transcode video to 720p or lower. Clients MUST NOT send the source file's metadata, such as location, device details, capture time and tags: images are re-encoded, and a video that cannot be transcoded is remuxed without it or not sent. `thumb` SHOULD be at most 64 pixels on the longest side.
+Clients SHOULD reduce images to 1600 pixels on the longest side and SHOULD transcode video to 720p or lower. Clients MUST NOT send the source file's metadata, such as location, device details, capture time and tags: images are re-encoded, and a video that cannot be transcoded is remuxed without it or not sent. Before re-encoding, clients MUST apply an image's EXIF orientation to its pixels. `thumb` SHOULD be at most 64 pixels on the longest side.
 
 ## 8. Calls
 

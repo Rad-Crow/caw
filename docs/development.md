@@ -31,7 +31,7 @@ cd android && ./gradlew connectedDebugAndroidTest    # needs a device or emulato
 e2e/run.sh    # two servers, headless browsers; screenshots in e2e/out/
 ```
 
-The web and Android tests check the test vectors in [protocol.md](protocol.md#13-test-vectors) and `testdata/groups.json`. `testdata/media` holds a photo and two videos (H.264 and VP9) with location and other metadata; the web, Android and e2e tests check that none of it is sent.
+The web and Android tests check the test vectors in [protocol.md](protocol.md#13-test-vectors) and `testdata/groups.json`. `testdata/media` holds a photo and two videos (H.264 and VP9) with location and other metadata; the web, Android and e2e tests check that none of it is sent. `rotated.jpg` is stored sideways with an EXIF orientation; the Android and e2e tests check that it is sent upright.
 
 ## Android
 

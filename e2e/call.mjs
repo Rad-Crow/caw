@@ -403,6 +403,23 @@ const videoLeft = await gpsVid.evaluate(received, ['+40.6892-074.0445/', '\xA9xy
 if (videoLeft.found.length) throw new Error(`video kept metadata: ${videoLeft.found}`)
 step(`photo and video metadata dropped before sending (video ${videoLeft.vp9 ? 'remuxed' : 'transcoded'})`)
 
+// stored 96x48 with a red block top left and EXIF orientation 6
+const rotMsg = await sendFixture('rotated.jpg', /Photo/, 'photo with an orientation tag')
+const rotImg = rotMsg.locator('.media img:not(.blur)')
+await rotImg.waitFor({ timeout: 15000 })
+const upright = await rotImg.evaluate(async (el) => {
+  const bmp = await createImageBitmap(await (await fetch(el.src)).blob())
+  const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d')
+  g.drawImage(bmp, 0, 0)
+  const red = (x, y) => {
+    const p = g.getImageData(x, y, 1, 1).data
+    return p[0] > 200 && p[1] < 90 && p[2] < 90
+  }
+  return `${bmp.width}x${bmp.height}${red(6, 6) ? ' top left' : ''}${red(bmp.width - 7, 6) ? ' top right' : ''}`
+})
+if (upright !== '48x96 top right') throw new Error(`photo not turned upright: ${upright}`)
+step('a photo stored sideways with an EXIF orientation arrived upright')
+
 const crowUrls = new Set()
 b.on('response', (r) => { if (/\/crow-\w+-[\w-]+\.mp3$/.test(r.url())) crowUrls.add(r.url()) })
 await b.getByRole('button', { name: /Bob/ }).click()
