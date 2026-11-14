@@ -1,0 +1,3 @@
+The attach button can take a photo or record a video with Caw's own camera. Each capture is shown for review before it is attached, and it is never saved to the phone's gallery.
+The + button on the home screen offers Scan invite, Share invite and Create group. Invites are scanned with Caw's own camera, and Paste invite takes an invite copied from a message.
+A photo sent in a group shows at once.
