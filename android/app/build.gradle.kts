@@ -18,8 +18,8 @@ android {
         applicationId = "com.radcrow.caw"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
         versionCode = versionCode!! * 10 + (abi?.let { abiCodes.getValue(it) } ?: 0)
         abi?.let { a -> ndk { abiFilters += a } }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

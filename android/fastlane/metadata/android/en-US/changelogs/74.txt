@@ -1,0 +1,1 @@
+Photos saved mirrored or flipped are sent the right way round.
